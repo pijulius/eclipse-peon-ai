@@ -27,6 +27,8 @@ import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.layout.RowData;
+import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
@@ -125,11 +127,6 @@ public class AIChatView implements EclipseAiMonitor {
         rootLayout.verticalSpacing = 0;
         parent.setLayout(rootLayout);
 
-        headerBar = new HeaderBarWidget(parent, SWT.NONE,
-                () -> aiService.getActiveAgent().getName(),
-                aiService::getToolStatus);
-        headerBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-
         // Borderless — a border's top edge would read as a divider against the flush header.
         chatHistory = new ChatMarkdownWidget(parent, SWT.NONE);
         chatHistory.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
@@ -138,13 +135,14 @@ public class AIChatView implements EclipseAiMonitor {
         // No background manipulation needed — SWT native widgets render their own correct backgrounds.
         inputBlock = new Composite(parent, SWT.BORDER);
         GridLayout inputBlockLayout = new GridLayout(1, false);
-        inputBlockLayout.marginWidth = 0;
-        inputBlockLayout.marginHeight = 0;
+        inputBlockLayout.marginWidth = 5;
+        inputBlockLayout.marginHeight = 5;
         inputBlockLayout.verticalSpacing = 0;
         inputBlock.setLayout(inputBlockLayout);
         // Restore the gap above the input block only (root verticalSpacing is 0).
         GridData inputBlockData = new GridData(SWT.FILL, SWT.BOTTOM, true, false);
         inputBlockData.verticalIndent = 5;
+        inputBlockData.horizontalIndent = 5;
         inputBlock.setLayoutData(inputBlockData);
 
         chatInput = new UserInputWidget(inputBlock, SWT.NONE,
@@ -159,7 +157,16 @@ public class AIChatView implements EclipseAiMonitor {
         questionWidget.setLayoutData(qgd);
         questionWidget.setVisible(false);
 
-        actionsBar = new ActionsBarWidget(inputBlock, SWT.NONE,
+        Composite footerBlock = new Composite(parent, SWT.NONE);
+        RowLayout footerBlockLayout = new RowLayout(SWT.HORIZONTAL);
+        footerBlockLayout.wrap = true;
+        footerBlockLayout.center = true;
+        footerBlockLayout.justify = false;
+        footerBlockLayout.marginWidth = 0;
+        footerBlock.setLayout(footerBlockLayout);
+        footerBlock.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false)); 
+
+        actionsBar = new ActionsBarWidget(footerBlock, SWT.PUSH,
             this::onClear,
             this::onHandoff,
             this::onAgentChange,
@@ -167,20 +174,27 @@ public class AIChatView implements EclipseAiMonitor {
             aiService::withThinkSupported,
             this::doCompressContext
         );
+        actionsBar.setLayoutData(new RowData());
         actionsBar.setModel(aiService.getActiveAgent().getAgentModelName());
 
-        statusLine = new StatusLineWidget(inputBlock, SWT.NONE,
+        statusLine = new StatusLineWidget(footerBlock, SWT.PUSH,
             this::onPinChange,
             this::onSkillsToggle,
             enabled -> aiService.getMcpConnectionService().toggle(enabled),
             this::onAgentsMdToggle
         );
 
+        statusLine.setLayoutData(new RowData());
         statusLine.setSkillsMenuHandler(
             () -> aiService.getSkillService().getAllLoadedSkills(),
             this::onSkillMenuSelection
         );
-        
+
+        headerBar = new HeaderBarWidget(footerBlock, SWT.PUSH,
+                () -> aiService.getActiveAgent().getName(),
+                aiService::getToolStatus);
+        headerBar.setLayoutData(new RowData());
+
         applyConfig();
         refreshChat();
 
