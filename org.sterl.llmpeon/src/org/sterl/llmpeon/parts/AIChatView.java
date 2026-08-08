@@ -192,7 +192,8 @@ public class AIChatView implements EclipseAiMonitor {
 
         headerBar = new HeaderBarWidget(footerBlock, SWT.PUSH,
                 () -> aiService.getActiveAgent().getName(),
-                aiService::getToolStatus);
+                aiService::getToolStatus,
+                aiService::getStatusAgents);
         headerBar.setLayoutData(new RowData());
 
         applyConfig();
@@ -324,6 +325,8 @@ public class AIChatView implements EclipseAiMonitor {
     @Override
     public void onChatMessage(int iteration, ChatRequest.Builder request) {
         chatHistory.updateLiveResponseInUIThread("waiting for AI...", 0, null);
+        // First loop callback where the agent's working flag is already true — light up the 🟢.
+        EclipseUtil.runInUiThread(parent, () -> headerBar.refreshRoster());
     }
 
     @Override
@@ -338,6 +341,7 @@ public class AIChatView implements EclipseAiMonitor {
 
             chatHistory.appendMessage(m);
             actionsBar.updateCompact(ai.getMemory().getTotalTokenUsed(), aiService.getConfig().getAutoCompactAfter());
+            headerBar.refreshRoster();
         });
     }
 
@@ -348,12 +352,16 @@ public class AIChatView implements EclipseAiMonitor {
 
     @Override
     public void onTokenUsage(dev.langchain4j.model.output.TokenUsage usage) {
-        EclipseUtil.runInUiThread(parent, () -> headerBar.addTokenUsage(usage));
+        EclipseUtil.runInUiThread(parent, () -> {
+            headerBar.addTokenUsage(usage);
+            headerBar.refreshRoster();
+        });
     }
 
     @Override
     public void onStreamingChunk(OnPartialAiResponse r) {
-        chatHistory.onStreamingChunk(r);
+        if (parent.isDisposed()) return;
+        EclipseUtil.runInUiThread(parent, () -> chatHistory.onStreamingChunk(r));
     }
 
     @Override
@@ -562,6 +570,10 @@ public class AIChatView implements EclipseAiMonitor {
     private void onAgentChange(AiAgent mode) {
         aiService.setActiveAgent(mode);
 
+        // The header status widget pulls the new agent's team live on the next refresh — nothing to
+        // reset here (the old onSubAgent chip state is gone; the widget holds no per-agent state).
+        headerBar.refreshRoster();
+
         if (!actionsBar.containsModelId(aiService.getActiveModel())) {
             actionsBar.addAndSelectModel(aiService.getActiveModel());
         } else {
@@ -574,6 +586,12 @@ public class AIChatView implements EclipseAiMonitor {
         var tutorial = aiService.getScaffoldTutorial();
         if (tutorial != null) {
             onChatResponse(new SimpleMessage(Type.AI, tutorial));
+        }
+
+        // Jon on an empty, undocumented workspace: greet + explain how he works (no docs/index.md yet)
+        var poTutorial = aiService.getPoTutorial();
+        if (poTutorial != null) {
+            onChatResponse(new SimpleMessage(Type.AI, poTutorial));
         }
 
         refreshChat();
@@ -684,6 +702,10 @@ public class AIChatView implements EclipseAiMonitor {
             Exception ex = null;
             ChatResponse cr = null;
             try {
+                // Jon only: fold docs/index.md into his FIRST user message as a one-time standing order,
+                // so it rides in the same UserMessage and the user's text stays the last TextContent.
+                String indexSeed = aiService.docsIndexSeedForFirstMessage();
+                if (indexSeed != null) this.standingOrders.addOneTimeOrder(indexSeed);
                 active.setUserContextInformations(this.standingOrders.build());
                 cr = active.call(messageToSend, this);
             } catch (Exception e) {
@@ -746,6 +768,7 @@ public class AIChatView implements EclipseAiMonitor {
         if (parent == null || parent.isDisposed()) return;
         actionsBar.lockWhileWorking(value);
         chatInput.isWorking(value);
+        headerBar.refreshRoster(); // reflect work start/end (esp. clear the 🟢 on end)
         if (!value) chatHistory.hideLiveStatus();
         if (!value && questionWidget != null && questionWidget.isVisible()) {
             questionWidget.cancel();
