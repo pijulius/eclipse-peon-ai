@@ -131,6 +131,16 @@ public class AIChatView implements EclipseAiMonitor {
         rootLayout.verticalSpacing = 0;
         parent.setLayout(rootLayout);
 
+<<<<<<< HEAD
+=======
+        headerBar = new HeaderBarWidget(parent, SWT.NONE,
+                () -> aiService.getActiveAgent().getName(),
+                aiService::getToolStatus,
+                aiService::getStatusAgents,
+                context);
+        headerBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+>>>>>>> upstream/main
         // Borderless — a border's top edge would read as a divider against the flush header.
         chatHistory = new ChatMarkdownWidget(parent, SWT.NONE, context);
         chatHistory.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
@@ -194,13 +204,15 @@ public class AIChatView implements EclipseAiMonitor {
             this::onSkillMenuSelection
         );
 
+<<<<<<< HEAD
         headerBar = new HeaderBarWidget(footerBlock, SWT.PUSH,
                 () -> aiService.getActiveAgent().getName(),
                 aiService::getToolStatus,
-                aiService::getStatusAgents,
-		context);
+                aiService::getStatusAgents);
         headerBar.setLayoutData(new RowData());
 
+=======
+>>>>>>> upstream/main
         applyConfig();
         refreshChat();
 
