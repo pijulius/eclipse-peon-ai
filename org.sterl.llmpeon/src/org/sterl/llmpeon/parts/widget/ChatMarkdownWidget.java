@@ -7,6 +7,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.core.resources.IFile;
@@ -50,7 +51,7 @@ public class ChatMarkdownWidget extends Composite {
     private final IEclipseContext context;
 
     private volatile boolean browserReady = false;
-    private final java.util.Queue<String> pendingExecutions = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.Queue<String> pendingMessages = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private volatile String currentTheme = "light";
 
     public ChatMarkdownWidget(Composite parent, int style, IEclipseContext context) {
@@ -71,9 +72,9 @@ public class ChatMarkdownWidget extends Composite {
                 if ("javaReady".equals(event.title)) {
                     EclipseUtil.runInUiThread(parent, () -> {
                         browserReady = true;
-                        String r;
-                        while ((r = pendingExecutions.poll()) != null) {
-                            browser.execute(r);
+                        String json;
+                        while ((json = pendingMessages.poll()) != null) {
+                            browser.execute("window.dispatchEvent(new MessageEvent('message', {data: " + json + "}));");
                         }
                     });
                 }
@@ -108,9 +109,7 @@ public class ChatMarkdownWidget extends Composite {
                             });
                     if (!EclipseUtil.searchWorkspaceFiles(fileName)
                             .isPresent()) {
-                        safeExecute(
-                                "appendMessage({role:'PROBLEM',message:'File not found: "
-                                        + fileName.replace("'", "\\'") + "'})");
+                        postMessage(Map.of("role", "PROBLEM", "message", "File not found: " + fileName));
                     }
                 }
             }
@@ -123,7 +122,6 @@ public class ChatMarkdownWidget extends Composite {
 
         clear();
     }
-
 
     private String loadChatHtml() {
         if (chatHtml != null)
@@ -158,11 +156,17 @@ public class ChatMarkdownWidget extends Composite {
         return html.replace("./", basePath);
     }
 
-    private void safeExecute(String js) {
-        if (browserReady) {
-            browser.execute(js);
-        } else {
-            pendingExecutions.add(js);
+    /** Send JSON payload to the browser via MessageEvent — identical to test harness approach. */
+    private void postMessage(Map<String, Object> payload) {
+        try {
+            String json = mapper.writeValueAsString(payload);
+            if (browserReady) {
+                browser.execute("window.dispatchEvent(new MessageEvent('message', {data: " + json + "}));");
+            } else {
+                pendingMessages.add(json);
+            }
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -175,16 +179,11 @@ public class ChatMarkdownWidget extends Composite {
     }
 
     public void appendMessage(SimpleMessage msg) {
-        try {
-            safeExecute(
-                    "appendMessage(" + mapper.writeValueAsString(msg) + ");");
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
+        postMessage(Map.of("role", msg.role(), "message", msg.message()));
     }
 
     public void hideLiveStatus() {
-        safeExecute("hideLiveStatus();");
+        postMessage(Map.of("type", "hideLiveStatus"));
     }
 
     public void onStreamingChunk(OnPartialAiResponse r) {
@@ -239,35 +238,24 @@ public class ChatMarkdownWidget extends Composite {
     }
 
     public void updateLiveResponseInUIThread(String state, double tokPerSec, String safeChunk) {
-        EclipseUtil.runInUiThread(parent, () -> {
-            try {
-                browser.execute("updateLiveResponse("
-                        + mapper.writeValueAsString(state) + ", " + tokPerSec
-                        + ", " + mapper.writeValueAsString(safeChunk) + ");");
-            } catch (JsonProcessingException e) {
-                // ignore
-            }
-        });
+        EclipseUtil.runInUiThread(parent, () -> postMessage(Map.of(
+                "type", "updateLiveResponse",
+                "state", state,
+                "tokPerSec", tokPerSec,
+                "chunk", safeChunk
+        )));
     }
 
     public void showDiff(String unifiedDiff) {
-        try {
-            safeExecute("appendDiff(" + mapper.writeValueAsString(unifiedDiff)
-                    + ");");
-            safeExecute(
-                "appendDiff(" + mapper.writeValueAsString(unifiedDiff) + ", '" + currentTheme + "');"
-            );
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
+        postMessage(Map.of("type", "appendDiff", "diff", unifiedDiff, "colorScheme", currentTheme));
     }
 
     public void clear() {
         this.browserReady = false;
-        this.pendingExecutions.clear();
+        this.pendingMessages.clear();
         browser.setText(loadChatHtml());
         currentTheme = EclipseUiUtil.resolveTheme(context);
-        safeExecute("setTheme('" + currentTheme + "');");
+        postMessage(Map.of("type", "setTheme", "theme", currentTheme));
     }
 
     public void appendMessage(ChatMessage msg) {
