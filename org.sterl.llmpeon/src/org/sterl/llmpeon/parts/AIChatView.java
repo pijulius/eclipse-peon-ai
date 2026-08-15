@@ -18,7 +18,6 @@ import org.eclipse.core.runtime.Status;
 import org.eclipse.core.runtime.jobs.Job;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences.IPreferenceChangeListener;
 import org.eclipse.core.runtime.preferences.InstanceScope;
-import org.eclipse.e4.core.contexts.IEclipseContext;
 import org.eclipse.e4.ui.di.Focus;
 import org.eclipse.e4.ui.services.IServiceConstants;
 import org.eclipse.jdt.core.IClassFile;
@@ -80,8 +79,6 @@ public class AIChatView implements EclipseAiMonitor {
 
     private static final ILog LOG = Platform.getLog(AIChatView.class);
 
-    @Inject IEclipseContext context;
-
     // Declared first so the aiService field initializer lambdas can capture them
     // without violating the Java forward-reference restriction.
     // All are null until @PostConstruct runs; the lambdas are only ever invoked after that.
@@ -132,7 +129,7 @@ public class AIChatView implements EclipseAiMonitor {
         parent.setLayout(rootLayout);
 
         // Borderless — a border's top edge would read as a divider against the flush header.
-        chatHistory = new ChatMarkdownWidget(parent, SWT.NONE, context);
+        chatHistory = new ChatMarkdownWidget(parent, SWT.NONE);
         chatHistory.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
         // inputBlock carries the single outer border for the entire input area (sections 2+3+4).
@@ -197,8 +194,7 @@ public class AIChatView implements EclipseAiMonitor {
         headerBar = new HeaderBarWidget(footerBlock, SWT.PUSH,
                 () -> aiService.getActiveAgent().getName(),
                 aiService::getToolStatus,
-                aiService::getStatusAgents,
-		context);
+                aiService::getStatusAgents);
         headerBar.setLayoutData(new RowData());
 
         applyConfig();

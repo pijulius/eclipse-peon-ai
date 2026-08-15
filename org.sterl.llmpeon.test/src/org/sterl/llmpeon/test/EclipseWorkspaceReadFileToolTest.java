@@ -18,7 +18,7 @@ import org.sterl.llmpeon.tool.ToolService;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 
-public class EclipseWorkspaceReadFileToolTest extends AbstractTest {
+public class EclipseWorkspaceReadFileToolTest extends AbstractIntegrationTest {
 
     @Test
     public void test_findReferences() {
@@ -33,7 +33,7 @@ public class EclipseWorkspaceReadFileToolTest extends AbstractTest {
         
         // THEN
         assertContains(content, getClass().getSimpleName() + ".java");
-        assertContains(content, "30");
+        assertContains(content, "31");
     }
 
     @Test
