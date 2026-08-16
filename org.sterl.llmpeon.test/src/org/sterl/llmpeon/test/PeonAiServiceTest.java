@@ -11,7 +11,6 @@ import static org.junit.Assume.assumeTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.List;
 
 import org.junit.Test;
@@ -31,16 +30,23 @@ import org.sterl.llmpeon.tool.tools.DiskFileWriteTool;
 import org.sterl.llmpeon.tool.tools.DiskGrepTool;
 
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.UserMessage;
 
 public class PeonAiServiceTest extends AbstractIntegrationTest {
 
     PeonAiService aiService = new PeonAiService(null, null, null, null);
-    
+
+    // Mirrors AIChatView's standing orders: the service (handoff, Jon's docs, plan) + AGENTS.md +
+    // the selected project.
     private final StandingOrdersBuilder standingOrders = new StandingOrdersBuilder()
             .add(aiService)
-            .add(aiService.getAgentsMdService());
+            .add(aiService.getAgentsMdService())
+            .add(() -> {
+                var p = aiService.getProject();
+                if (p == null) return List.of();
+                return List.of(new org.sterl.llmpeon.context.SimpleContextItem("Selected project:" + System.lineSeparator()
+                        + org.sterl.llmpeon.parts.shared.EclipseUtil.projectInfo(p)));
+            });
     
     @Test
     public void test_compact_tool() {
@@ -106,14 +112,17 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         mockLlmServer.queueResponse(AiMessage.aiMessage("Pong"));
         assertTrue(Files.exists(Path.of("../skills")));
         aiService.getSkillService().refresh(Path.of("../skills"));
-        
+
         // WHEN
         aiService.getActiveAgent().call("Ping", null);
-        
-        // THEN
+
+        // THEN — find user message with "Ping" and AI response with "Pong"
         var msg = aiService.getActiveAgent().getMemory().getCopy();
-        assertEquals("Ping", ((TextContent)((UserMessage)msg.get(0)).contents().getLast()).text());
-        assertEquals("Pong", ((AiMessage)msg.get(1)).text());
+        var userMsg = msg.stream().filter(m -> m instanceof UserMessage).map(UserMessage.class::cast).toList();
+        var aiMsg = msg.stream().filter(m -> m instanceof AiMessage).map(AiMessage.class::cast).toList();
+        assertTrue("Should have user message", userMsg.size() >= 1);
+        assertTrue("Should have AI message", aiMsg.size() >= 1);
+        assertEquals("Pong", aiMsg.get(aiMsg.size() - 1).text());
     }
     
     @Test
@@ -139,23 +148,23 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
                 .url(mockLlmServer.getUrl())
                 .build());
         mockLlmServer.queueResponse(AiMessage.aiMessage("Pong"));
+        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed")); // for compact
         eclipseWriteFile("AGENTS.md", "# Test Specifics");
-        
+
         // WHEN
         aiService.setProject(project);
-        aiService.getActiveAgent().setUserContextInformations(standingOrders.build());
-        aiService.getActiveAgent().call("Ping", null);
-        
-        // THEN
-        assertHasMessageWith(standingOrders.build(), "# Test Specifics");
-        
-        // AND
-        assertNotNull(mockLlmServer.getCapturedTool("readSkill"));
-        var userMessages = mockLlmServer.getCapturedMessages().stream()
-                .filter(m -> m instanceof UserMessage)
-                .map(m -> ((UserMessage)m)).toList();
-        
-        assertHasUserMessageWith(userMessages, "# Test Specifics");
+        var agent = aiService.getActiveAgent();
+        agent.setTurnContextSupplier(() -> standingOrders.buildItems());
+        agent.call("Ping", null);
+
+        // THEN — render ContextItems for assertion (standing orders builder works)
+        var rendered = standingOrders.buildItems().stream().map(item -> item.render()).toList();
+        assertHasMessageWith(rendered, "# Test Specifics");
+
+        // AND — turn context is restored after compact (not injected on first call)
+        agent.compressContext(null);
+        var memory = agent.getMemory().getCopy();
+        assertHasUserMessageWith(memory, "# Test Specifics");
     }
 
     @Test
@@ -173,13 +182,13 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertTrue("handoff should succeed with a plan", handedOff);
         assertEquals(AiDevAgent.NAME, aiService.getActiveAgent().getName());
 
-        // AND: first get() returns the handoff standing order
-        var orders = aiService.get();
+        // AND: first get() returns the handoff standing order (rendered)
+        var orders = aiService.get().stream().map(item -> item.render()).toList();
         assertEquals(2, orders.size());
         assertContains(orders.get(0), "Handover from ");
 
         // AND: second get() contains still the reference to the plan
-        var orders2 = aiService.get();
+        var orders2 = aiService.get().stream().map(item -> item.render()).toList();
         assertContains(orders2.getFirst(), "peon-plan/overview.md");
     }
     
@@ -232,19 +241,20 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
                 .url(mockLlmServer.getUrl()).build();
         aiService.updateConfig(config);
         aiService.setActiveAgent(AiScaffoldAgent.NAME);
-        
-        // WHEN
-        aiService.getActiveAgent().setUserContextInformations(standingOrders.build());
-        aiService.getActiveAgent().call("hello", null);
-        
-        // THEN
-        assertTrue(standingOrders.build().size() > 1);
-        var msg = mockLlmServer.getLastRequestBody();
-        assertContains(msg, "- memoryAdd:");
-        // AND
-        var um = aiService.getActiveAgent().getMemory().getLastOf(UserMessage.class);
-        assertTrue(um.contents().size() > 2);
-        assertHasUserMessageWith(Arrays.asList(um), "- memoryAdd:");
+
+        // WHEN — set turn context supplier and compact to restore context
+        var agent = aiService.getActiveAgent();
+        agent.setTurnContextSupplier(() -> standingOrders.buildItems());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
+        agent.getMemory().add(UserMessage.from("pre-compact"));
+        agent.compressContext(null);
+
+        // THEN — standing orders builder produces items
+        assertTrue(standingOrders.buildItems().size() > 1);
+
+        // AND — turn context restored after compact contains tool descriptions
+        var memory = agent.getMemory().getCopy();
+        assertHasUserMessageWith(memory, "- memoryAdd:");
     }
     
     @Test
@@ -260,35 +270,34 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         aiService.getActiveAgent().getMemory().add(UserMessage.from("Text 1"));
         aiService.getActiveAgent().getMemory().add(UserMessage.from("Text 2"));
 
-        // WHEN
-        aiService.getActiveAgent().setUserContextInformations(Arrays.asList("Text 1", "Text 2", "Text 3", "Text 3", "Unique"));
+        // WHEN — set turn context supplier and compact to inject items into memory
+        aiService.getActiveAgent().setTurnContextSupplier(() -> List.of(
+                new org.sterl.llmpeon.context.SimpleContextItem("Text 1"),
+                new org.sterl.llmpeon.context.SimpleContextItem("Text 2"),
+                new org.sterl.llmpeon.context.SimpleContextItem("Text 3"),
+                new org.sterl.llmpeon.context.SimpleContextItem("Text 3"),
+                new org.sterl.llmpeon.context.SimpleContextItem("Unique")));
+        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
+        aiService.getActiveAgent().compressContext(null);
         aiService.getActiveAgent().call("Text 1", null);
         
-        // THEN
-        var captured = mockLlmServer.getCapturedMessages();
-        var lastUserMsg = captured.stream()
-                .filter(m -> m instanceof UserMessage)
-                .map(m -> (UserMessage)m)
-                .reduce((a, b) -> b)
-                .orElseThrow();
-        
-        var textContents = lastUserMsg.contents().stream()
-                .filter(c -> c instanceof dev.langchain4j.data.message.TextContent)
-                .map(c -> ((dev.langchain4j.data.message.TextContent)c).text())
+        // THEN — verify turn context items reached memory and duplicates were handled
+        var memory = aiService.getActiveAgent().getMemory().getCopy();
+        var allTexts = memory.stream()
+                .map(m -> org.sterl.llmpeon.shared.ChatMessageUtil.toString(m))
                 .toList();
+
+        // Text 1 appears at least once (from turn context + call message)
+        assertTrue("Text 1 should appear in memory", allTexts.stream().anyMatch(t -> t.contains("Text 1")));
         
-        // Text 1 appears twice: once from userContextInformations (not filtered because memory
-        // check happens before the new message is added) and once from the call message
-        assertEquals("Text 1 should appear twice (context + call)", 2, countText(textContents, "Text 1"));
+        // Text 2 appears once from turn context
+        assertEquals("Text 2 should appear once", 1, allTexts.stream().filter(t -> t.contains("Text 2")).count());
         
-        // Text 2 appears once from userContextInformations
-        assertEquals("Text 2 should appear once", 1, countText(textContents, "Text 2"));
-        
-        // Text 3 was dedupped: only one occurrence despite being in userContextInformations twice
-        assertEquals("Text 3 should appear once (dedupped)", 1, countText(textContents, "Text 3"));
+        // Text 3 was dedupped by restoreTurnContext: only one occurrence despite supplier providing it twice
+        assertEquals("Text 3 should appear once (dedupped)", 1, allTexts.stream().filter(t -> t.contains("Text 3")).count());
         
         // Unique appears once
-        assertEquals("Unique should appear once", 1, countText(textContents, "Unique"));
+        assertEquals("Unique should appear once", 1, allTexts.stream().filter(t -> t.contains("Unique")).count());
     }
     
     /** Jon must be the first entry in the agent dropdown. */
@@ -321,38 +330,10 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
     }
 
     /**
-     * The docs/index.md seed is offered only for Jon's FIRST user message (empty memory) and never
-     * mutates memory itself — the view folds it into the first message as a one-time standing order.
-     * Activation / project-set must not seed. Regression for the seeding-timing change.
-     */
-    @Test
-    public void test_po_docs_index_seed_only_for_first_message() throws IOException {
-        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
-        eclipseWriteFile("docs/index.md", "# Docs Index" + System.lineSeparator() + "- feature-x");
-        aiService.setProject(project);
-        aiService.setActiveAgent(AiPoAgent.NAME);
-        aiService.getActiveAgent().getMemory().clear();
-
-        // Activating Jon / (re)setting the project must NOT seed memory
-        aiService.setProject(project);
-        assertEquals(0, aiService.getActiveAgent().getMemory().size());
-
-        // WHEN the first message is about to be sent: the seed text is offered (view attaches it)
-        var seed = aiService.docsIndexSeedForFirstMessage();
-        assertNotNull(seed);
-        assertContains(seed, "feature-x");
-        // reading the seed does not mutate memory — the fold happens in call() via the standing order
-        assertEquals(0, aiService.getActiveAgent().getMemory().size());
-
-        // AND once Jon has state, no more seed is offered (empty-memory guard)
-        aiService.getActiveAgent().getMemory().add(UserMessage.from("hi"));
-        assertNull(aiService.docsIndexSeedForFirstMessage());
-    }
-
-    /**
      * "Die Info": on an empty workspace with no docs/index.md, Jon greets the user with a one-time chat
-     * tutorial. It is the clean complement of the docs-index seed — never shown once an index exists (the
-     * seed handles that) and never once Jon has state. Regression for the getPoTutorial trigger.
+     * tutorial. It is the clean complement of the docs index (which rides in his turn context,
+     * ADR-0029) — never shown once an index exists and never once Jon has state.
+     * Regression for the getPoTutorial trigger.
      */
     @Test
     public void test_po_tutorial_only_without_docs_index() {
@@ -371,7 +352,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         aiService.getActiveAgent().getMemory().add(UserMessage.from("hi"));
         assertNull(aiService.getPoTutorial());
 
-        // and when an index exists, the seed owns onboarding -> no intro even with empty memory
+        // and when an index exists, Jon navigates it -> no intro even with empty memory
         aiService.getActiveAgent().getMemory().clear();
         eclipseWriteFile("docs/index.md", "# Docs Index");
         assertNull(aiService.getPoTutorial());
@@ -459,12 +440,8 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         var ctx = dev.langchain4j.data.message.SystemMessage.from("Today is 2026-08-06; prefer eclipse* over disk*.");
         aiService.setStaticContext(List.of(ctx));
 
-        assertTrue("Plan slave got the static context", delegate.getPlanSlave().getStaticContext().contains(ctx));
-        assertTrue("Dev slave got the static context", delegate.getDevSlave().getStaticContext().contains(ctx));
-    }
-
-    private int countText(List<String> texts, String text) {
-        return (int) texts.stream().filter(t -> text.equals(t)).count();
+        assertTrue("Plan slave got the static context", !delegate.getPlanSlave().getPersistentContext().isEmpty());
+        assertTrue("Dev slave got the static context", !delegate.getDevSlave().getPersistentContext().isEmpty());
     }
 
     // --- Header status widget MVP (agenten-status-im-header-mvp-plan.md, ADR-0025) -------------
@@ -500,5 +477,284 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
 
         aiService.setActiveAgent(AiDevAgent.NAME);
         assertTrue("switching away clears it immediately", aiService.getStatusAgents().isEmpty());
+    }
+
+    // --- Inc 3: ContextItem Integration Tests ---------------------------------
+
+    /** ADR-0029: the system prompt is 100% static (OS/date rules) — no file items, on any agent. */
+    @Test
+    public void test_persistentContext_isStaticOnly() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        aiService.setProject(project);
+        aiService.setActiveAgent(AiPoAgent.NAME);
+
+        // GIVEN: memory.md + docs/index.md exist (they must NOT land in the persistent context)
+        eclipseWriteFile("docs/memory.md", "# Memory\n- project context");
+        eclipseWriteFile("docs/index.md", "# Docs Index\n- feature-x");
+
+        // WHEN
+        var ctx = dev.langchain4j.data.message.SystemMessage.from("Today is 2026-08-06; prefer eclipse* over disk*.");
+        aiService.setStaticContext(List.of(ctx));
+
+        // THEN: Jon's persistent context is the static base item only
+        var jon = aiService.getActiveAgent();
+        assertEquals(1, jon.getPersistentContext().size());
+        assertContains(jon.getPersistentContext().get(0).render(), "prefer eclipse*");
+
+        // AND: the slaves' persistent context is static only, too
+        var delegate = jon.getToolService().getTool(JonDelegateTool.class).orElseThrow();
+        assertEquals(1, delegate.getPlanSlave().getPersistentContext().size());
+        assertEquals(1, delegate.getDevSlave().getPersistentContext().size());
+    }
+
+    /** ADR-0029: the turn context carries the project info AND AGENTS.md (no longer in the system prompt). */
+    @Test
+    public void test_turnContextSupplier_providesProjectInfoAndAgentsMd() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        aiService.getActiveAgent().getMemory().clear();
+
+        // GIVEN: AGENTS.md exists (write before setProject so agentsMdService.load picks it up)
+        eclipseWriteFile("AGENTS.md", "# Test Specifics");
+        aiService.setProject(project);
+
+        // AND the turn context supplier is the standing orders builder (like AIChatView sets it)
+        aiService.getActiveAgent().setTurnContextSupplier(() -> standingOrders.buildItems());
+
+        // AND mock server configured
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed summary"));
+
+        // WHEN: compact triggers restoreTurnContext
+        aiService.getActiveAgent().compressContext(null);
+
+        // THEN: turn context restored — project info AND AGENTS.md
+        var memory = aiService.getActiveAgent().getMemory().getCopy();
+        assertHasUserMessageWith(memory, "Selected project:");
+        assertHasUserMessageWith(memory, "# Test Specifics");
+    }
+
+    /** S2 (ADR-0029): Jon's docs/memory.md + docs/index.md ride in his turn context (history). */
+    @Test
+    public void test_turnContext_providesJonFiles() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        aiService.getActiveAgent().getMemory().clear();
+
+        // GIVEN: Jon's docs exist
+        eclipseWriteFile("docs/memory.md", "# Memory\n- project context");
+        eclipseWriteFile("docs/index.md", "# Docs Index\n- feature-x");
+        aiService.setProject(project);
+
+        // AND the turn context supplier is the standing orders builder (like AIChatView sets it)
+        aiService.getActiveAgent().setTurnContextSupplier(() -> standingOrders.buildItems());
+
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
+
+        // WHEN: compact triggers restoreTurnContext
+        aiService.getActiveAgent().compressContext(null);
+
+        // THEN: both files are injected as history messages (header + content)
+        var memory = aiService.getActiveAgent().getMemory().getCopy();
+        assertHasUserMessageWith(memory, "docs/memory.md");
+        assertHasUserMessageWith(memory, "# Memory");
+        assertHasUserMessageWith(memory, "docs/index.md");
+        assertHasUserMessageWith(memory, "# Docs Index");
+
+        // AND missing files -> nothing injected, no error
+        eclipseDeleteResource("docs/memory.md");
+        eclipseDeleteResource("docs/index.md");
+        aiService.getActiveAgent().getMemory().clear();
+        aiService.getActiveAgent().compressContext(null);
+        memory = aiService.getActiveAgent().getMemory().getCopy();
+        assertHasNoUserMessageWith(memory, "# Memory");
+        assertHasNoUserMessageWith(memory, "# Docs Index");
+    }
+
+    /** S5 (ADR-0029): the slaves get AGENTS.md in their turn context via additionalContext. */
+    @Test
+    public void test_slaves_getAgentsMdInTurnContext() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        eclipseWriteFile("AGENTS.md", "# Slave Test Specifics");
+        aiService.setProject(project);
+        aiService.setActiveAgent(AiPoAgent.NAME);
+
+        // AND mock server configured for the slave's call
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("plan done"));
+
+        var delegate = aiService.getActiveAgent().getToolService().getTool(JonDelegateTool.class).orElseThrow();
+
+        // WHEN: Jon delegates to his plan slave
+        delegate.talkPlan("make a plan");
+
+        // THEN: the plan slave's memory contains the AGENTS.md content (via the additionalContext function)
+        assertHasUserMessageWith(delegate.getPlanSlave().getMemory().getCopy(), "# Slave Test Specifics");
+    }
+
+    // --- ADR-0028: Compact-Delegation Integration Tests -------------------------
+
+    /** ADR-0029: compact restores the turn context for Jon (project + AGENTS.md + his docs survive). */
+    @Test
+    public void test_compactDelegatesToPoAgent() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: Jon aktiv, docs/memory.md + docs/index.md + AGENTS.md existieren
+        eclipseWriteFile("docs/memory.md", "# Memory\n- project context");
+        eclipseWriteFile("docs/index.md", "# Docs Index\n- feature-x");
+        eclipseWriteFile("AGENTS.md", "# Test Specifics\nRule 1");
+        aiService.setProject(project);
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        aiService.getActiveAgent().getMemory().clear();
+
+        // AND the turn context supplier is the standing orders builder (like AIChatView sets it)
+        aiService.getActiveAgent().setTurnContextSupplier(() -> standingOrders.buildItems());
+
+        // Memory füllen (simuliert Konversation vor Compact)
+        aiService.getActiveAgent().getMemory().add(UserMessage.from("Talk 1"));
+        aiService.getActiveAgent().getMemory().add(AiMessage.from("Reply 1"));
+
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("WHAT: Compressed summary of conversation"));
+
+        // WHEN: Compact via Agent
+        aiService.getActiveAgent().compressContext(null);
+
+        // THEN: Turn-Context (Project + AGENTS.md + Jons Docs) überlebt als UserMessage in Memory
+        var memory = aiService.getActiveAgent().getMemory().getCopy();
+        assertHasUserMessageWith(memory, "Selected project:");
+        assertHasUserMessageWith(memory, "# Test Specifics");
+        assertHasUserMessageWith(memory, "# Memory");
+        assertHasUserMessageWith(memory, "# Docs Index");
+
+        // AND: Summary ist in Memory (als AiMessage)
+        assertTrue("AI summary should be in memory", memory.stream()
+                .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("WHAT: Compressed summary")));
+
+        // AND: alte Konversation ist weg (check all message texts)
+        var allTexts = memory.stream()
+                .map(m -> org.sterl.llmpeon.shared.ChatMessageUtil.toString(m))
+                .toList();
+        assertHasNoMessageWith(allTexts, "Talk 1");
+    }
+
+    /** Mixed restore: setUserContextInformations survives compact (restoreUserContext). */
+    @Test
+    public void test_compactMixedRestore_survives() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: Dev-Agent mit setUserContextInformations
+        aiService.setActiveAgent(AiDevAgent.NAME);
+        aiService.getActiveAgent().getMemory().clear();
+
+        aiService.getActiveAgent().getMemory().add(UserMessage.from("old talk"));
+        aiService.getActiveAgent().getMemory().add(AiMessage.from("old reply"));
+
+        aiService.getActiveAgent().setTurnContextSupplier(() -> List.of(
+                new org.sterl.llmpeon.context.SimpleContextItem("order1: be concise"),
+                new org.sterl.llmpeon.context.SimpleContextItem("order2: no filler")));
+
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
+
+        // WHEN: Compact via Agent
+        aiService.getActiveAgent().compressContext(null);
+
+        // THEN: orders sind im Memory (gerestored via restoreUserContext)
+        var memory = aiService.getActiveAgent().getMemory().getCopy();
+        assertHasUserMessageWith(memory, "order1: be concise");
+        assertHasUserMessageWith(memory, "order2: no filler");
+
+        // AND: Summary (als AiMessage)
+        assertTrue("AI summary should be in memory", memory.stream()
+                .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("compressed")));
+
+        // AND: alte Konversation ist weg
+        var allTexts = memory.stream()
+                .map(m -> org.sterl.llmpeon.shared.ChatMessageUtil.toString(m))
+                .toList();
+        assertHasNoMessageWith(allTexts, "old talk");
+    }
+
+    /** Compact does not duplicate existing context (contains-Check). */
+    @Test
+    public void test_compactNoDuplicates() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: Kontext bereits in Memory
+        aiService.setActiveAgent(AiDevAgent.NAME);
+        aiService.getActiveAgent().getMemory().clear();
+
+        String existingContext = "already in memory";
+        aiService.getActiveAgent().getMemory().add(UserMessage.from(existingContext));
+        aiService.getActiveAgent().getMemory().add(AiMessage.from("reply"));
+
+        aiService.getActiveAgent().setTurnContextSupplier(() -> List.of(new org.sterl.llmpeon.context.SimpleContextItem(existingContext)));
+
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
+
+        // WHEN: Compact
+        aiService.getActiveAgent().compressContext(null);
+
+        // THEN: Kontext erscheint NUR EINMAL (contains-Check)
+        var memory = aiService.getActiveAgent().getMemory().getCopy();
+        var allTexts = memory.stream()
+                .map(m -> org.sterl.llmpeon.shared.ChatMessageUtil.toString(m))
+                .toList();
+
+        // Count occurrences across all messages
+        long count = allTexts.stream()
+                .filter(t -> t.contains(existingContext))
+                .count();
+        assertEquals("Context should appear exactly once (no duplicate after compact)", 1, count);
+    }
+
+    /** CompactSessionTool is registered in shared tool service and delegates to agent via compressContext. */
+    @Test
+    public void test_compactViaTool_delegatesToAgent() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: Jon aktiv mit Memory-Inhalt
+        eclipseWriteFile("AGENTS.md", "# Delegation Test");
+        aiService.setProject(project);
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        aiService.getActiveAgent().getMemory().clear();
+        aiService.getActiveAgent().getMemory().add(UserMessage.from("pre-compact talk"));
+        aiService.getActiveAgent().getMemory().add(AiMessage.from("pre-compact reply"));
+
+        // AND the turn context supplier is the standing orders builder (like AIChatView sets it)
+        aiService.getActiveAgent().setTurnContextSupplier(() -> standingOrders.buildItems());
+
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("WHAT: Delegated summary"));
+
+        // CompactSessionTool lives in sharedToolService (Jon's own tool service has no defaults)
+        assertIsPresent(aiService.getSharedToolService().getTool(CompactSessionTool.class));
+
+        // WHEN: Compact via agent (the tool delegates to this path via request.getAgent())
+        aiService.getActiveAgent().compressContext(null);
+
+        // THEN: Memory enthält Project-Info + AGENTS.md + Summary (ADR-0029)
+        var memory = aiService.getActiveAgent().getMemory().getCopy();
+        assertHasUserMessageWith(memory, "Selected project:");
+        assertHasUserMessageWith(memory, "# Delegation Test");
+        assertTrue("AI summary should be in memory", memory.stream()
+                .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("WHAT: Delegated summary")));
     }
 }

@@ -388,6 +388,7 @@ public class AIChatView implements EclipseAiMonitor {
         var ai = aiService.getActiveAgent();
         actionsBar.updateCompact(ai.getMemory().getTotalTokenUsed(), aiService.getConfig().getAutoCompactAfter());
     }
+
     private void refreshChat() {
         chatHistory.clear();
         refreshStatusLine();
@@ -603,6 +604,7 @@ public class AIChatView implements EclipseAiMonitor {
         var active = aiService.getActiveAgent();
         if (active.getMemory().size() == 0) return;
         lockWhileWorking(true);
+        chatHistory.clear();
         Job.create("Compressing context", monitor -> {
             monitor.beginTask("Compressing chat", 1);
             monitorRef.set(monitor);
@@ -610,10 +612,15 @@ public class AIChatView implements EclipseAiMonitor {
             ChatResponse cr = null;
             try {
                 cr = active.compressContext(this);
-                Display.getDefault().asyncExec(this::refreshChat);
             } catch (Exception e) {
                 ex = handleChatException(e);
             } finally {
+                // own refresh to ensure the onTool messages are preserved after compact
+                Display.getDefault().asyncExec(() -> {
+                    refreshStatusLine();
+                    aiService.getActiveAgent().getMemory().forEach(chatHistory::appendMessage);
+                    chatHistory.hideLiveStatus();
+                });
                 handleDoneChatResponse(cr, monitor, ex);
             }
             return PeonConstants.status("Compressed", ex);
@@ -692,11 +699,7 @@ public class AIChatView implements EclipseAiMonitor {
             Exception ex = null;
             ChatResponse cr = null;
             try {
-                // Jon only: fold docs/index.md into his FIRST user message as a one-time standing order,
-                // so it rides in the same UserMessage and the user's text stays the last TextContent.
-                String indexSeed = aiService.docsIndexSeedForFirstMessage();
-                if (indexSeed != null) this.standingOrders.addOneTimeOrder(indexSeed);
-                active.setUserContextInformations(this.standingOrders.build());
+                active.setTurnContextSupplier(this.standingOrders::buildItems);
                 cr = active.call(messageToSend, this);
             } catch (Exception e) {
                 ex = handleChatException(e);
@@ -719,6 +722,7 @@ public class AIChatView implements EclipseAiMonitor {
             actionsBar.updateCompact(
                     aiService.getActiveAgent().getMemory().getTotalTokenUsed(),
                     aiService.getConfig().getAutoCompactAfter());
+            chatHistory.hideLiveStatus();
         });
     }
 

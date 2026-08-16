@@ -14,6 +14,7 @@ import org.sterl.llmpeon.agent.AiPlanAgent;
 import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
+import org.sterl.llmpeon.context.SimpleContextItem;
 import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.model.SimpleMessage;
@@ -54,7 +55,8 @@ class JonDelegateToolTest {
         assertThat(reply).contains("SLAVE REPLY");
         assertThat(tool.getPlanSlave().getMemory().containsUserMessage("make a plan")).isTrue();
         // AND
-        assertThat(reply).contains("Context: 11 token");
+        // Token-Zahl ist plattformabhängig (lineSeparator im Prompt) — wir prüfen das Format des Kontext-Reports, nicht die Zahl.
+        assertThat(reply).containsPattern("Context: \\d+ token - \\d+% used\\.");
     }
 
     @Test
@@ -70,7 +72,8 @@ class JonDelegateToolTest {
         assertThat(tool.getDevSlave().getMemory().containsUserMessage("what did you build?")).isTrue();
         
         // AND
-        assertThat(reply).contains("Context: 14 token - 0% used.");
+        // Token-Zahl ist plattformabhängig (lineSeparator im Prompt) — wir prüfen das Format des Kontext-Reports, nicht die Zahl.
+        assertThat(reply).containsPattern("Context: \\d+ token - \\d+% used\\.");
     }
 
     /** planWithPlanAgent injects the plan-writing discipline as a standing order; talkPlan does not. */
@@ -79,11 +82,11 @@ class JonDelegateToolTest {
         var tool = newTool();
 
         tool.talkPlan("just a question");
-        assertThat(tool.getPlanSlave().getUserContextInformations())
+        assertThat(tool.getPlanSlave().getRenderedTurnContext())
                 .noneMatch(s -> s.contains("plan tools (planSave/planUpdate"));
 
         tool.planWithPlanAgent("write the plan");
-        assertThat(tool.getPlanSlave().getUserContextInformations())
+        assertThat(tool.getPlanSlave().getRenderedTurnContext())
                 .anyMatch(s -> s.contains("plan tools (planSave/planUpdate"));
     }
 
@@ -118,8 +121,8 @@ class JonDelegateToolTest {
         tool.talkPlan("go");
         tool.askDev("go");
 
-        assertThat(tool.getPlanSlave().getUserContextInformations()).contains("MEMORY: always run the tests");
-        assertThat(tool.getDevSlave().getUserContextInformations()).contains("MEMORY: always run the tests");
+        assertThat(tool.getPlanSlave().getRenderedTurnContext()).contains("MEMORY: always run the tests");
+        assertThat(tool.getDevSlave().getRenderedTurnContext()).contains("MEMORY: always run the tests");
     }
 
     /**
@@ -134,8 +137,8 @@ class JonDelegateToolTest {
         tool.talkPlan("go");
         tool.askDev("go");
 
-        assertThat(tool.getPlanSlave().getUserContextInformations()).contains("Selected project:\nDisk path: /ws/demo");
-        assertThat(tool.getDevSlave().getUserContextInformations()).contains("Selected project:\nDisk path: /ws/demo");
+        assertThat(tool.getPlanSlave().getRenderedTurnContext()).contains("Selected project:\nDisk path: /ws/demo");
+        assertThat(tool.getDevSlave().getRenderedTurnContext()).contains("Selected project:\nDisk path: /ws/demo");
     }
 
     /**
@@ -150,8 +153,24 @@ class JonDelegateToolTest {
         tool.talkPlan("go");
         tool.askDev("go");
 
-        assertThat(tool.getPlanSlave().getUserContextInformations()).contains("AGENTS.md:\n---\n\nAlways build green.");
-        assertThat(tool.getDevSlave().getUserContextInformations()).contains("AGENTS.md:\n---\n\nAlways build green.");
+        assertThat(tool.getPlanSlave().getRenderedTurnContext()).contains("AGENTS.md:\n---\n\nAlways build green.");
+        assertThat(tool.getDevSlave().getRenderedTurnContext()).contains("AGENTS.md:\n---\n\nAlways build green.");
+    }
+
+    /** S5: additionalContext is applied per slave agent name — each slave gets its own items. */
+    @Test
+    void additionalContext_appliedPerAgentName() {
+        var tool = newTool();
+        tool.setAdditionalContext(name -> List.of(
+                new SimpleContextItem("AGENTS-" + name + ".md:\n---\n" + name + " rules")));
+
+        tool.talkPlan("go");
+        tool.askDev("go");
+
+        assertThat(tool.getPlanSlave().getRenderedTurnContext())
+                .anyMatch(s -> s.contains("Peon-Plan rules"));
+        assertThat(tool.getDevSlave().getRenderedTurnContext())
+                .anyMatch(s -> s.contains("Peon-Dev rules"));
     }
 
     /**
@@ -179,18 +198,18 @@ class JonDelegateToolTest {
 
         // plain dev question: no build-loop directive
         tool.askDev("just answer a question");
-        assertThat(tool.getDevSlave().getUserContextInformations())
+        assertThat(tool.getDevSlave().getRenderedTurnContext())
                 .noneMatch(s -> s.contains("Task by task, never a red build"));
 
         // build call with a plan: the build loop rides along with the path
         tool.buildWithDev("implement it", "peon-plan/overview.md");
-        assertThat(tool.getDevSlave().getUserContextInformations())
+        assertThat(tool.getDevSlave().getRenderedTurnContext())
                 .anyMatch(s -> s.contains("Task by task, never a red build"))
                 .anyMatch(s -> s.contains("peon-plan/overview.md"));
 
         // the Plan slave never gets the dev build loop
         tool.talkPlan("make a plan");
-        assertThat(tool.getPlanSlave().getUserContextInformations())
+        assertThat(tool.getPlanSlave().getRenderedTurnContext())
                 .noneMatch(s -> s.contains("Task by task, never a red build"));
     }
 
@@ -200,12 +219,12 @@ class JonDelegateToolTest {
         var tool = newTool();
 
         tool.buildWithDev("start", "peon-plan/overview.md");
-        assertThat(tool.getDevSlave().getUserContextInformations())
+        assertThat(tool.getDevSlave().getRenderedTurnContext())
                 .anyMatch(s -> s.contains("peon-plan/overview.md"));
 
         // a later plan-less build call must keep the plan path (survives compaction)
         tool.buildWithDev("continue", null);
-        assertThat(tool.getDevSlave().getUserContextInformations())
+        assertThat(tool.getDevSlave().getRenderedTurnContext())
                 .anyMatch(s -> s.contains("peon-plan/overview.md"));
     }
 }
