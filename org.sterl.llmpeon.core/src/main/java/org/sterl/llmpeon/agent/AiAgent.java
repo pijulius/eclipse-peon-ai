@@ -1,15 +1,15 @@
 package org.sterl.llmpeon.agent;
 
-import java.util.Collection;
 import java.util.List;
+import java.util.function.Supplier;
 
+import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.WriteValidator;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
 
-import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
 public interface AiAgent {
@@ -28,32 +28,23 @@ public interface AiAgent {
      */
     void clear();
     
-    /**
-     * Only context information which doesn't change - change only after clear!
-     * Otherwise it will kill the KV-cache!
-     * 
-     * @param staticContext attached as system message.
-     */
-    public void setStaticContext(Collection<ChatMessage> staticContext);
+    /** Set persistent context items rendered into the system prompt on every rebuild. */
+    default void setPersistentContext(List<ContextItem> context) {
+    }
 
-    /**
-     * The static context previously set via {@link #setStaticContext(Collection)} (date/OS/file rules).
-     * Mirrors {@link #getUserContextInformations()}. Default empty for agents that hold none.
-     */
-    default List<ChatMessage> getStaticContext() {
+    /** @return persistent context items, or empty list if none set. */
+    default List<ContextItem> getPersistentContext() {
         return List.of();
     }
 
-    /**
-     * Addition prompt information which should stay until changed -- added to the user message
-     * 
-     * @param userContextInformations addition prompt
-     */
-    void setUserContextInformations(Collection<String> userContextInformations);
-    /**
-     * addition prompt information which should stay until changed
-     */
-    List<String> getUserContextInformations();
+    /** Set turn-scoped context supplier — items injected after compact or on first call. */
+    default void setTurnContextSupplier(Supplier<List<ContextItem>> supplier) {
+    }
+
+    /** @return rendered turn context items, or empty list if no supplier set. */
+    default List<String> getRenderedTurnContext() {
+        return List.of();
+    }
     
     /**
      * If a handover is available show the button
