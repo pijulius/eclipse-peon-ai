@@ -90,11 +90,13 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
             String query,
             @P(name = "projectName", required = false) 
             String projectName,
-            @P(description = "max results to return. 0 = unlimited. Default 50.", required = false, name = "limit") 
+            @P(description = "max results to return. Default 100, max 1000.", required = false, name = "limit") 
             Integer inLimit) {
 
         ArgsUtil.requireNonBlank(query, "query");
-        final int limit = inLimit == null ? 50 : inLimit;
+        if (inLimit == null) inLimit = 100;
+        if (inLimit == 0) inLimit = 1000;
+        final int limit = Math.min(inLimit, 1000);
 
         query = FileUtils.normalizePath(query);
         final var matcher = StringMatcher.wildCardMatcher(query);
@@ -107,11 +109,12 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
             for (IProject p : ResourcesPlugin.getWorkspace().getRoot().getProjects()) {
                 if (!p.isOpen()) continue;
                 matches.addAll(searchProjectFor(p, matcher, limit - matches.size()));
-                if (limit > 0 && matches.size() >= limit) break;
+                if (matches.size() >= limit) break;
             }
         }
 
-        onTool("Search workspace " + StringUtil.trimToEmpty(projectName) + " for " + query + " returned " + matches.size() + " results.");
+        onTool("Search workspace " + StringUtil.trimToEmpty(projectName) + " for " + query 
+                + " returned " + matches.size() + " results.");
         String suffix = null;
         if (matches.isEmpty()) {
             suffix =  "Use findJavaType for Java classes or " + LIST_WORKSPACE_NAME + " to explore the project structure. Try a wildcard e.g. *folder*FileName*.java or grepWorkspaceFiles for content search.";
@@ -125,7 +128,7 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
             project.accept(new IResourceVisitor() {
                 @Override
                 public boolean visit(IResource resource) {
-                    if (limit > 0 && results.size() >= limit) return false;
+                    if (results.size() >= limit) return false;
                     if (resource.isDerived()) return false;
                     if (resource.getType() == IResource.FILE) {
                         var file = JdtUtil.pathOf(resource);

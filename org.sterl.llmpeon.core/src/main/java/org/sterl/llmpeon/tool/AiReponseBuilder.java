@@ -11,12 +11,12 @@ public class AiReponseBuilder {
         var result = new StringBuilder();
         if (results.isEmpty()) {
             result.append("No files found.").append("\n")
-                  .append("1. Retry with a different, shorter or more generic term (max 3 attempts total).").append("\n")
+                  .append("1. Retry with a different, shorter or more generic term (max 3 attempts total).").append(System.lineSeparator())
                   .append("2. After all attempts failed: if the result is critical, ask the user - otherwise continue.");
         } else {
-            results.forEach(s -> result.append(s).append("\n"));
+            results.forEach(s -> result.append(s).append(System.lineSeparator()));
         }
-        if (suffix != null) result.append("\n").append(suffix);
+        if (suffix != null) result.append(System.lineSeparator()).append(suffix);
         return result.toString();
     }
 }
