@@ -16,6 +16,7 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
+import org.eclipse.core.runtime.QualifiedName;
 import org.sterl.llmpeon.parts.PeonConstants;
 
 public class IoUtils {
@@ -59,6 +60,13 @@ public class IoUtils {
     
     public static void writeFile(IFile file, String content,IProgressMonitor monitor ) {
         try {
+            var path = JdtUtil.pathOf(file);
+            if (path != null && path.endsWith(".aclass")) {
+                file.setPersistentProperty(
+                        new QualifiedName("com.sap.adt", "editable"), 
+                        "true"
+                    );
+            }
             var charset = getCharset(file);
             ensureFolders(file.getParent(), monitor);
             file.write(content.getBytes(charset), true, false, true, monitor);
