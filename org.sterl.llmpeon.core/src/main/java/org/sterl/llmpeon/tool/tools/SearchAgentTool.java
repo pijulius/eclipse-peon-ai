@@ -51,15 +51,10 @@ public class SearchAgentTool extends AbstractTool {
 
             onTool("Da Sniffa "
                     + (modelName == null ? "" : "(" + modelName + ")")
-                    + " start:\n" + prompt);
+                    + " start:" + System.lineSeparator() + System.lineSeparator() + prompt);
             long startNanos = System.nanoTime();
             dev.langchain4j.model.chat.response.ChatResponse response;
-            monitor.onSubAgent("Search", true); // header roster: light the transient Search chip
-            try {
-                response = toolService.executeLoop(request.build());
-            } finally {
-                monitor.onSubAgent("Search", false);
-            }
+            response = toolService.executeLoop(request.build());
             long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000;
 
             onTool("Da Sniffa done. (" + StringUtil.humanElapsed(elapsedMillis) + ")");
