@@ -40,11 +40,10 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
             @P(description = "exact text to replace", name = "oldString", required = false) String inOldString,
             @P(name = "newString", required = false) String inNewString) {
         
-        final CompletableFuture<String> result = new CompletableFuture<String>();
 
         if (inNewString == null && inOldString == null) throw new IllegalArgumentException("Provide a now or old string!");
 
-        PlatformUI.getWorkbench().getDisplay().asyncExec(() -> {
+        CompletableFuture<String> result = EclipseUtil.runInUiThread(() -> {
             var newString = inNewString == null ? "" : inNewString;
             var oldString = inOldString == null ? "" : inOldString;
             
@@ -52,35 +51,29 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
             onTool("Edit in editor");
             
             var e = EclipseUtil.getOpenEditor();
-            if (e.isEmpty()) {
-                result.complete("Nothing currently open.");
-            } else {
-                var editor = e.get();
-                if (editor instanceof ITextEditor text) {
-                    var openFile = EclipseUtil.getOpenFile();
-                    var path = openFile.isPresent() ? JdtUtil.pathOf(openFile.get()) : "Open in editor";
-                    validateWrite(path);
-                    
-                    IDocumentProvider provider = text.getDocumentProvider();
-                    IDocument document = provider.getDocument(text.getEditorInput());
-                    
-                    var oldDoc = document.get();
-                    var newDoc = FileUtils.applyEdit(path, document.get(), oldString, newString);
-                    document.set(newDoc);
-                    
-                    var success = "Saved!";
-                    if (!PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage().saveEditor(editor, false)) {
-                        if (!PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage().saveEditor(editor, true)) {
-                            success = "Save failed! Ask user to save editor.";
-                        }
-                    }
-                    monitor.onFileUpdate(new AiFileUpdate(path, oldDoc, newDoc));
-                    result.complete(openFile.isPresent() ? success + " of " + JdtUtil.pathOf(openFile.get()) : success);
-                    
-                } else {
-                    throw new IllegalArgumentException("Cannot read from unknown editor " + editor.getClass().getName());
+            if (e.isEmpty()) return "Nothing currently open.";
+
+            var text = EclipseUtil.getTextEditor(e.get());
+            var openFile = EclipseUtil.getOpenFile();
+            var path = openFile.isPresent() ? JdtUtil.pathOf(openFile.get()) : "Open in editor";
+            validateWrite(path);
+            
+            IDocumentProvider provider = text.getDocumentProvider();
+            IDocument document = provider.getDocument(text.getEditorInput());
+            
+            var oldDoc = document.get();
+            var newDoc = FileUtils.applyEdit(path, document.get(), oldString, newString);
+            document.set(newDoc);
+            
+            var success = "Saved!";
+            if (!PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage().saveEditor(text, false)) {
+                if (!PlatformUI.getWorkbench().getActiveWorkbenchWindow().getActivePage().saveEditor(text, true)) {
+                    success = "Save failed! Ask user to save editor.";
                 }
             }
+            monitor.onFileUpdate(new AiFileUpdate(path, oldDoc, newDoc));
+            return openFile.isPresent() ? success + " of " + JdtUtil.pathOf(openFile.get()) : success;
+                
         });
         
         try {

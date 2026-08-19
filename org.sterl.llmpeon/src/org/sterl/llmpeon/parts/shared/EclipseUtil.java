@@ -4,7 +4,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.eclipse.core.resources.IContainer;
@@ -29,11 +31,15 @@ import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkingSet;
 import org.eclipse.ui.PlatformUI;
 import org.eclipse.ui.ide.IDE;
+import org.eclipse.ui.part.MultiPageEditorPart;
+import org.eclipse.ui.texteditor.IDocumentProvider;
+import org.eclipse.ui.texteditor.ITextEditor;
+import org.jspecify.annotations.NonNull;
 import org.sterl.llmpeon.shared.AiMonitor.AiFileUpdate;
 import org.sterl.llmpeon.shared.FileUtils;
 import org.sterl.llmpeon.shared.StringUtil;
-import org.eclipse.ui.texteditor.*;
-import org.jspecify.annotations.NonNull;
+
+import jakarta.annotation.Nonnull;
 
 public class EclipseUtil {
     // TODO move to EclipseUiUtil
@@ -45,6 +51,18 @@ public class EclipseUtil {
                 return;
             fn.run();
         });
+    }
+    
+    public static <T> CompletableFuture<T> runInUiThread(Supplier<T> fn) {
+        final var result = new CompletableFuture<T>();
+        PlatformUI.getWorkbench().getDisplay().asyncExec(() -> {
+            try {
+                result.complete(fn.get());
+            } catch (Exception e) {
+                result.completeExceptionally(e);
+            }
+        });
+        return result;
     }
 
     public static Path workspacePath() {
@@ -60,6 +78,9 @@ public class EclipseUtil {
         return loc.toFile().toPath();
     }
     
+    /**
+     * Run in UI Thread!!
+     */
     public static Optional<IEditorPart> getOpenEditor() {
         if (PlatformUI.getWorkbench() == null) return Optional.empty();
 
@@ -69,11 +90,35 @@ public class EclipseUtil {
         if (ap == null) return Optional.empty();
         return Optional.ofNullable(ap.getActiveEditor());
     }
+    
+    @Nonnull
+    public static ITextEditor getTextEditor(IEditorPart editor) {
+        if (editor instanceof ITextEditor text) {
+            return text;
+        } else if (editor instanceof MultiPageEditorPart multiPage) {
+            var textEditor = multiPage.getAdapter(ITextEditor.class);
+            
+            if (textEditor == null) {
+                throw new IllegalArgumentException(
+                    "MultiPageEditor " + editor.getClass().getName() + " has no ITextEditor adapter. " +
+                    "Please switch to the Source tab in the editor.");
+            }
+            return textEditor;
+        } else {
+            throw new IllegalArgumentException(
+                "Cannot read from unknown editor " 
+                        + editor.getClass().getName()
+                        + " (not ITextEditor or MultiPageEditorPart)"
+                
+            );
+        }
+    }
 
     /**
      * Opens the given workspace file in the workbench editor. Must be called
      * from the UI thread. Throws {@link RuntimeException} if the editor cannot
-     * be opened.
+     * be opened. Run in UI Thread.
+     * 
      * @return the open {@link IEditorPart}, <code>null</code> if failed to open
      */
     public static IEditorPart openInEditor(IFile file) {
@@ -89,6 +134,10 @@ public class EclipseUtil {
                     "Could not open editor for " + file.getFullPath(), e);
         }
     }
+    
+    /**
+     * Run in UI Thread!!
+     */
     @NonNull
     public AiFileUpdate editInEditor(IFile resource, String oldContent, String newContent) {
         IEditorPart editor = openInEditor(resource);

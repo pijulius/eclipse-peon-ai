@@ -63,22 +63,14 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
     @Tool("Reads the content of current open eclipse workspace file by the user - may be different to the file as it can contain unsaved user edits.")
     public String eclipseReadOpenFile() {
         
-        final CompletableFuture<String> result = new CompletableFuture<String>();
-        PlatformUI.getWorkbench().getDisplay().asyncExec(() -> {
+        final CompletableFuture<String> result = EclipseUtil.runInUiThread(() -> {
             var e = EclipseUtil.getOpenEditor();
             onTool("Reading open editor");
-            if (e.isEmpty()) {
-                result.complete("Nothing currently open.");
-            } else {
-                var editor = e.get();
-                if (editor instanceof ITextEditor text) {
-                    IDocumentProvider provider = text.getDocumentProvider();
-                    IDocument document = provider.getDocument(text.getEditorInput());
-                    result.complete(document.get());
-                } else {
-                    throw new IllegalArgumentException("Cannot read from unknown editor " + editor.getClass().getName());
-                }
-            }
+            if (e.isEmpty()) return "Nothing currently open.";
+            var text = EclipseUtil.getTextEditor(e.get());
+            IDocumentProvider provider = text.getDocumentProvider();
+            IDocument document = provider.getDocument(text.getEditorInput());
+            return document.get();
         });
         try {
             return result.get(2, TimeUnit.MINUTES);
