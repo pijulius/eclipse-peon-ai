@@ -4,6 +4,8 @@ package org.sterl.llmpeon.parts.tools;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.eclipse.core.resources.IContainer;
 import org.eclipse.core.resources.IFile;
@@ -12,7 +14,10 @@ import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceVisitor;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.jface.text.IDocument;
 import org.eclipse.ui.PlatformUI;
+import org.eclipse.ui.texteditor.IDocumentProvider;
+import org.eclipse.ui.texteditor.ITextEditor;
 import org.jspecify.annotations.NonNull;
 import org.sterl.llmpeon.parts.shared.EclipseUtil;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
@@ -53,6 +58,26 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
         } catch (Exception e) {
             throw new RuntimeException("Could not open editor for " + filePath, e);
         }
+    }
+    
+    @Tool("Reads the content of current open eclipse workspace file by the user - may be different to the file as it can contain unsaved user edits.")
+    public String eclipseReadOpenFile() {
+        
+        final CompletableFuture<String> result = EclipseUtil.runInUiThread(() -> {
+            var e = EclipseUtil.getOpenEditor();
+            onTool("Reading open editor");
+            if (e.isEmpty()) return "Nothing currently open.";
+            var text = EclipseUtil.getTextEditor(e.get());
+            IDocumentProvider provider = text.getDocumentProvider();
+            IDocument document = provider.getDocument(text.getEditorInput());
+            return document.get();
+        });
+        try {
+            return result.get(2, TimeUnit.MINUTES);
+        } catch (Exception e) {
+            throw new IllegalStateException("Timeout during eclipse editor read", e);
+        }
+
     }
 
     public static final String READ_ECLIPSE_FILE_TOOL = "eclipseReadFile";
