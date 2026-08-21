@@ -300,8 +300,7 @@ class AbstractAgentTest {
         agent.addMessage(UserMessage.from("old message"));
 
         // Set turn context supplier
-        List<ContextItem> turnContext = List.of(new SimpleContextItem("turn context item"));
-        agent.setTurnContextSupplier(() -> turnContext);
+        agent.setTurnContextSupplier(() -> List.of(new SimpleContextItem("turn context item")));
 
         // WHEN
         agent.compressContext(monitor -> {});
@@ -326,7 +325,7 @@ class AbstractAgentTest {
         });
 
         var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
-        agent.setPersistentContext(List.of(new SimpleContextItem("persistent context")));
+        agent.setStaticContext(List.of(new SimpleContextItem("persistent context")));
 
         // First call — builds systemMessage
         agent.call("first", monitor -> {});
@@ -480,7 +479,7 @@ class AbstractAgentTest {
         var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
         ContextItem labeled = new SimpleContextItem("docs/memory.md", "labeled content");
         ContextItem unlabeled = new SimpleContextItem("unlabeled content");
-        agent.setPersistentContext(List.of(labeled, unlabeled));
+        agent.setStaticContext(List.of(labeled, unlabeled));
 
         List<String> toolMessages = new ArrayList<>();
         AiMonitor monitor = new AiMonitor() {

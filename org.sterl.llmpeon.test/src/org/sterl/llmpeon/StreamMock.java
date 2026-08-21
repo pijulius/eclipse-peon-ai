@@ -1,5 +1,7 @@
 package org.sterl.llmpeon;
 
+import static org.junit.Assert.fail;
+
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Optional;
@@ -9,6 +11,7 @@ import java.util.function.Function;
 import org.jspecify.annotations.NonNull;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
 
+import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.UserMessage;
@@ -16,17 +19,19 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
-import lombok.Getter;
 
 /**
  * Test helper that creates real StreamingChatModel implementations to avoid Mockito mocking issues on Java 26.
  */
 public class StreamMock {
 
-    @Getter
     private volatile ChatRequest lastRequest;
     
     private final AtomicInteger callCount = new AtomicInteger();
+    
+    public StreamingChatModel buildOkMock() {
+        return buildMock(e -> ChatResponse.builder().aiMessage(AiMessage.aiMessage("Ok")).build());
+    }
 
     /** Create a test StreamingChatModel that captures requests and returns predefined responses. */
     public StreamingChatModel buildMock(Function<ChatRequest, ChatResponse> fn) {
@@ -84,5 +89,18 @@ public class StreamMock {
             if (ChatMessageUtil.toString(chatMessage).contains(value)) result++;
         }
         return result;
+    }
+    
+    public void assertCount(String value, int count) {
+        var c = count(value);
+        if (c != count) {
+            fail("Expected to find times " + value + " " + count + " but found " + c + " in: " + System.lineSeparator()
+                + String.join(System.lineSeparator(), allAsString())
+            );
+        }
+    }
+    
+    public ChatRequest getLastRequest() {
+        return lastRequest;
     }
 }
