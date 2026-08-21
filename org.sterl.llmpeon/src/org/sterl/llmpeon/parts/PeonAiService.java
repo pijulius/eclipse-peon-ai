@@ -6,14 +6,13 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
 
 import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
+import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.Platform;
 import org.sterl.llmpeon.AgentService;
-import org.sterl.llmpeon.StandingOrdersBuilder.ContextItemProvider;
 import org.sterl.llmpeon.agent.AiAgent;
-import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
 import org.sterl.llmpeon.agent.AiPoAgent;
 import org.sterl.llmpeon.agent.NamedAgent;
@@ -25,6 +24,9 @@ import org.sterl.llmpeon.context.AgentsMdContextItem;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.EclipseFileContextItem;
 import org.sterl.llmpeon.context.SimpleContextItem;
+import org.sterl.llmpeon.context.StaticContextItem;
+import org.sterl.llmpeon.context.UserContext;
+import org.sterl.llmpeon.parts.ai.component.BuildPoAgentComponent;
 import org.sterl.llmpeon.parts.config.LlmPreferenceInitializer;
 import org.sterl.llmpeon.parts.config.McpConnectionService;
 import org.sterl.llmpeon.parts.shared.EclipseUtil;
@@ -38,28 +40,23 @@ import org.sterl.llmpeon.parts.tools.EclipseGrepTool;
 import org.sterl.llmpeon.parts.tools.EclipseRunTestTool;
 import org.sterl.llmpeon.parts.tools.EclipseWorkspaceReadFileTool;
 import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
-import org.sterl.llmpeon.parts.tools.PlanReadTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
 import org.sterl.llmpeon.scaffold.ReloadConfigTool;
-import org.sterl.llmpeon.shared.ChatMessageUtil;
+import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.shared.StringUtil;
 import org.sterl.llmpeon.skill.SkillService;
 import org.sterl.llmpeon.tool.ToolService;
-import org.sterl.llmpeon.tool.component.SmartToolExecutor;
-import org.sterl.llmpeon.tool.tools.CompactSessionTool;
 import org.sterl.llmpeon.tool.tools.DiskFileReadTool;
 import org.sterl.llmpeon.tool.tools.DiskFileWriteTool;
 import org.sterl.llmpeon.tool.tools.DiskGrepTool;
-import org.sterl.llmpeon.tool.tools.JonDelegateTool;
 import org.sterl.llmpeon.tool.tools.SearchAgentTool;
 import org.sterl.llmpeon.tool.tools.SkillTool;
 
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
 
 /**
  * Bundles all AI services into a single eagerly-initialized object.
@@ -69,10 +66,10 @@ import dev.langchain4j.data.message.UserMessage;
  * has a chance to call any {@code @Inject} methods.</p>
  *
  */
-public class PeonAiService implements ContextItemProvider {
+public class PeonAiService {
 
-    /** Jon's RAM-only slaves compact at 70% of the shared budget so their throw-away context stays lean. */
-    private static final double SLAVE_COMPACT_FACTOR = 0.7;
+    private static final ILog LOG = Platform.getLog(PeonAiService.class);
+    private final UserContext userContext = new UserContext();
 
     private final AgentService agentService;
     private final ConfiguredChatModel configuredModel;
@@ -80,8 +77,6 @@ public class PeonAiService implements ContextItemProvider {
     /** Shared tool service used by dev/plan/custom agents (MCP, AskUserTool, ShellTool, workspace disk tools). */
     private final ToolService sharedToolService;
     private final AiScaffoldAgent scaffoldAgent;
-    /** Jon's delegate tool — the header roster peeks its Plan/Dev slaves when Jon is the active agent. */
-    private final JonDelegateTool jonDelegateTool;
 
     private final SkillService skillService;
     private final CommandService commandService;
@@ -99,10 +94,8 @@ public class PeonAiService implements ContextItemProvider {
     
     private final ReloadConfigTool reloadConfigTool;
     
-    private final WorkspaceMemoryTool workspaceMemoryTool = WorkspaceMemoryTool.getInstance();
+    private final WorkspaceMemoryTool workspaceMemoryTool = new WorkspaceMemoryTool();
 
-    private  volatile IProject currentProject = null;
-    
     private IFile plan;
 
     /** Transient standing-order line set on handoff, consumed once by {@link #get()}. */
@@ -121,9 +114,17 @@ public class PeonAiService implements ContextItemProvider {
                          Consumer<Boolean> mcpStateChange,
                          Runnable onAgentReload) {
 
-        var config = LlmPreferenceInitializer.buildWithDefaults();
-        configuredModel = config.build();
-
+        this(sendTrigger, openInEditorCallback, mcpStateChange, onAgentReload, LlmPreferenceInitializer.buildWithDefaults().build());
+    }
+    
+    public PeonAiService(Runnable sendTrigger,
+            Consumer<IFile> openInEditorCallback,
+            Consumer<Boolean> mcpStateChange,
+            Runnable onAgentReload,
+            ConfiguredChatModel configuredModel) {
+        
+        var config              = configuredModel.getConfig();
+        this.configuredModel    = configuredModel;
         var rootPath            = EclipseUtil.workspacePath();
         sharedToolService       = new ToolService();
         skillService            = new SkillService();
@@ -168,80 +169,31 @@ public class PeonAiService implements ContextItemProvider {
         // Add scaffold as persistent agent (survives clearAgents on reload)
         agentService.addPersistentAgent(scaffoldAgent);
 
-        // Peon-PO (Jon): own curated tool set — docs read/write/grep only (no shell/build/test/plan).
-        // Reuses the shared Eclipse tool instances so project updates + the per-request write validator
-        // (WriteValidator.DOCS from AiPoAgent) apply automatically.
-        var poToolService = new ToolService(false);
-        poToolService.addTool(workspaceReadFilesTool);
-        poToolService.addTool(workspaceWriteFilesTool);
-        poToolService.addTool(eclipseGrepTool);
-        // Jon curates the shared memory (write) — he knows it is shared by all agents, so writing it
-        // steers his slaves and the other agents (they only ever READ it, via standing-order injection).
-        poToolService.addTool(workspaceMemoryTool);
-        // Read-only plan access: hasPlan (returns the path) + planRead. Jon reviews & hands the path
-        // to buildWithDev but never writes the plan himself — that is his Peon-Plan agent's job.
-        poToolService.addTool(new PlanReadTool(planTool));
-        // Jon's Plan/Dev slaves: RAM-only (2-arg ctor — no history file, ADR-0024), reusing the shared
-        // Eclipse tool set. Lazy singletons via the factory so Jon-in-core stays testable headless.
-        // Slaves may READ the shared memory (injected as a standing order) but never WRITE it — strip the
-        // memory-write tool from their effective set; only Jon curates the shared memory.
-        Predicate<SmartToolExecutor> noPrivilegedTools = t -> !(t.getTool() instanceof WorkspaceMemoryTool)
-                && !(t.getTool() instanceof AskUserTool);
-        // Eager shared slaves (ADR-0025): created once here and handed — as the same NamedAgent objects —
-        // to both the delegate tool (which drives them) and AiPoAgent (which exposes them via getTeam()).
-        AiAgent planSlave = new AiPlanAgent(configuredModel, sharedToolService, SLAVE_COMPACT_FACTOR) {
-            @Override protected Predicate<SmartToolExecutor> getToolFilter() {
-                return super.getToolFilter().and(noPrivilegedTools);
-            }
-        };
-        AiAgent devSlave = new AiDevAgent(configuredModel, sharedToolService, SLAVE_COMPACT_FACTOR) {
-            @Override protected Predicate<SmartToolExecutor> getToolFilter() {
-                return super.getToolFilter().and(noPrivilegedTools);
-            }
-        };
-        var thinka = new NamedAgent("Da Thinka", planSlave);
-        var mek = new NamedAgent("Da Mek", devSlave);
-        // Slaves also need the same relevant context as the active agent (Jon gets it via userContext;
-        // they get it folded into their injected standing orders — read-only, like the shared memory):
-        // the shared memory and the selected project. AGENTS-<agent>.md + the plan file ride in via
-        // additionalContext as turn context (ADR-0029).
-        jonDelegateTool = new JonDelegateTool(thinka, mek, () -> {
-            var orders = new java.util.ArrayList<String>();
-            for (ContextItem item : workspaceMemoryTool.get()) orders.add(item.render());
-            if (currentProject != null) orders.add("Selected project:" + System.lineSeparator()
-                    + EclipseUtil.projectInfo(currentProject));
-            return orders;
-        });
-        jonDelegateTool.setAdditionalContext(agentName -> {
-            var items = new java.util.ArrayList<ContextItem>();
-            items.addAll(AgentsMdContextItem.itemsFor(agentName, this::getProject));
-            items.add(new EclipseFileContextItem(PlanTool.OVERVIEW_FILE, this::getProject));
-            return items;
-        });
-        poToolService.addTool(jonDelegateTool);
-        // Jon's own throw-away research sub-agent (Da Sniffa) — searches with his read/grep tools to
-        // save his context; stateless one-shot, not one of his persistent slaves.
-        poToolService.addTool(new SearchAgentTool(poToolService));
-        poToolService.addTool(new CompactSessionTool());
-        var poAgent = new AiPoAgent(configuredModel, poToolService, config.getConfigDir(), List.of(thinka, mek));
-        // Turn-scoped context fallback for non-UI/test paths — AIChatView overrides it with the
-        // standing-orders builder (which also carries AGENTS.md, ADR-0029).
-        poAgent.setTurnContextSupplier(() -> {
-            var items = new java.util.ArrayList<org.sterl.llmpeon.context.ContextItem>();
-            IProject project = currentProject;
-            if (project != null) {
-                items.add(() -> "Selected project:" + System.lineSeparator()
-                        + EclipseUtil.projectInfo(project));
-            }
-            return items;
-        });
+        var poAgent = new BuildPoAgentComponent(configuredModel, config, this::getProject, sharedToolService)
+                .build();
+            //new AiPoAgent(configuredModel, poToolService, config.getConfigDir(), List.of(thinka, mek));
+
         agentService.addPersistentAgent(poAgent);
 
         mcpConnectionService = new McpConnectionService(sharedToolService, mcpStateChange);
 
         updateConfig(configuredModel.getConfig());
+        initStaticContext();
     }
     
+    
+    private void initStaticContext() {
+        var env = new StaticContextItem();
+        
+        for (var agent : this.getAgents()) {
+            var context = new ArrayList<ContextItem>();
+            context.add(env);
+            context.addAll(this.workspaceMemoryTool.get());
+            agent.setStaticContext(context);
+            agent.setTurnContextSupplier(() -> get());
+        }
+    }
+
     /**
      * Propagates a new {@link LlmConfig} to all chat services and refreshes skills.
      * Safe to call from any thread.
@@ -297,10 +249,10 @@ public class PeonAiService implements ContextItemProvider {
     /**
      * Updates the active project across all project-aware services.
      * Safe to call from any thread — each downstream setter manages its own state.
+     * @return <code>true</code> if changed
      */
-    public void setProject(IProject project) {
+    public boolean setProject(IProject project) {
         this.plan = null; // stale reference — restore on next agent activation if needed
-        currentProject = project;
 
         var projectPath = JdtUtil.pathOf(project);
 
@@ -313,6 +265,7 @@ public class PeonAiService implements ContextItemProvider {
             diskFileReadTool.setWorkingDir(projectPath);
             diskGrepTool.setWorkingDir(projectPath);
         }
+        return this.userContext.setCurrentProject(project);
     }
 
     // -------------------------------------------------------------------------
@@ -331,25 +284,25 @@ public class PeonAiService implements ContextItemProvider {
         if (toAgent.isEmpty()) return false;
 
         String planText;
+        String planPath;
         if (this.plan != null) { // this.plan — not disk, avoids stale project reference
             planText = readPlan();
+            planPath = JdtUtil.pathOf(this.plan);
+
+            _handoffLine = new SimpleContextItem("Handover reference " + getActiveAgent().getName(), 
+                    "Handover from " + getActiveAgent().getName() + " " + planPath);
         } else {
             var chatPlan = getActiveAgent().getMemory().getLastOf(AiMessage.class);
             if (chatPlan == null) planText = null;
             else planText = chatPlan.text();
+            
+            planPath = "Handover from " + getActiveAgent().getName() + ":";
         }
 
         if (planText != null) {
-            if (this.plan != null) {
-                _handoffLine = new SimpleContextItem("Handover " + getActiveAgent().getName(), 
-                        "Handover from " + getActiveAgent().getName() + " " + JdtUtil.pathOf(this.plan));
-            }
-
+            // and directly add the plan too ...
             toAgent.get().clear();
-            toAgent.get().getMemory().add(UserMessage.from(
-                    "Handover from " + getActiveAgent().getName() + System.lineSeparator()
-                    + planText));
-
+            toAgent.get().getMemory().add(UserMessage.from(planPath + System.lineSeparator() + planText));
             this.agentService.setActiveAgent(toAgent.get());
         }
         
@@ -373,7 +326,7 @@ public class PeonAiService implements ContextItemProvider {
     // -------------------------------------------------------------------------
 
     public IProject getProject() {
-        return currentProject;
+        return userContext.getCurrentProject();
     }
 
     public LlmConfig getConfig() {
@@ -534,53 +487,26 @@ public class PeonAiService implements ContextItemProvider {
         getActiveAgent().clear();
     }
     
+    public void clearAll() {
+        this.plan = null;
+        this.agentService.getAgents().forEach(AiAgent::clear);
+    }
+    
     public List<AiAgent> getAgents() {
         return this.agentService.getAgents();
     }
 
     private String readPlan() {
-        if (this.plan == null) return "";
+        if (this.plan == null || !this.plan.exists()) return "";
         return "Plan: " + JdtUtil.pathOf(plan) + System.lineSeparator() + "---" + System.lineSeparator() + System.lineSeparator()
             + IoUtils.readString(plan);
     }
 
-    /**
-     * Sets the 100% static system prompt (OS/date rules only, ADR-0029) on all managed agents and
-     * Jon's RAM slaves. File context (AGENTS.md, memory.md, index.md, plan) lives in the turn
-     * context (history), not here.
-     */
-    public void setStaticContext(List<ChatMessage> content) {
-        List<ContextItem> baseItems = content.stream()
-                .map(msg -> (ContextItem) new SimpleContextItem(staticText(msg)))
-                .toList();
-
-        // Apply to all managed agents (Dev, Plan, Custom, Scaffold)
-        for (var agent : this.agentService.getAgents()) {
-            agent.setPersistentContext(new ArrayList<>(baseItems));
-        }
-
-        // Jon's RAM slaves are not registered in agentService, so give them the same static context
-        // (date/OS + file-access rules) directly — Inc 2, docs/sklaven-kontext-plan.md.
-        for (var slave : List.of(jonDelegateTool.getPlanSlave(), jonDelegateTool.getDevSlave())) {
-            slave.setPersistentContext(new ArrayList<>(baseItems));
-        }
-    }
-
-    /**
-     * The text of a static prompt message. {@code ChatMessageUtil.toString()} only renders
-     * User/Ai/Tool messages — a SystemMessage's text would be silently dropped, so extract it
-     * directly (SystemMessage is the only type AIChatView passes).
-     */
-    private static String staticText(ChatMessage msg) {
-        if (msg instanceof SystemMessage sm) return sm.text();
-        return ChatMessageUtil.toString(msg);
-    }
-
-    @Override
-    public List<ContextItem> get() {
+    private List<ContextItem> get() {
         var result = new LinkedList<ContextItem>();
 
         var agent = getActiveAgent();
+
         if ((agent instanceof AiScaffoldAgent)) {
             var configDir = getConfig().getConfigDir();
             if (configDir == null) return List.of(new SimpleContextItem("No config dir set -- inform the user to check the config"));
@@ -598,8 +524,8 @@ public class PeonAiService implements ContextItemProvider {
                 }
                 result.add(new SimpleContextItem("Scaffold env. info", orders.toString()));
                 orders.setLength(0);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+            } catch (IllegalArgumentException e) {
+                LOG.info("Directories missing " + e.getMessage());
             }
 
             // Available tools from sharedToolService
@@ -609,25 +535,54 @@ public class PeonAiService implements ContextItemProvider {
             }
             
             result.add(new SimpleContextItem("Scaffold tool names", orders.toString()));
-            return result;
         } else {
-            if (_handoffLine != null) {
+            if (_handoffLine == null) {
+                final var plan = getProject().getFile(PlanTool.OVERVIEW_FILE);
+                if (plan != null && plan.exists()) {
+                    result.add(new ContextItem() {
+                        @Override
+                        public String label() {
+                            return "Plan reference " + dedupKey();
+                        }
+                        @Override
+                        public String dedupKey() {
+                            return JdtUtil.pathOf(plan);
+                        }
+                        @Override
+                        public String render() {
+                            if (!plan.exists()) return null;
+                            return "Existing plan found: " + JdtUtil.pathOf(plan);
+                        };
+                    });
+                }
+            } else {
                 // Consume handoff line once (set by onHandoff, survives compaction)
                 result.add(_handoffLine);
                 _handoffLine = null;
             }
-            
-            // Jon's own docs ride in his turn context (history, ADR-0029) — missing files render null
-            // and are skipped silently.
-            if (agent instanceof AiPoAgent) {
-                result.add(new EclipseFileContextItem("docs/memory.md", this::getProject));
-                result.add(new EclipseFileContextItem("docs/index.md", this::getProject));
-            }
-            // TODO this can be moved to the agent itself
-            result.addAll(AgentsMdContextItem.itemsFor(getActiveAgent().getName(), this::getProject));
-            result.add(new EclipseFileContextItem(PlanTool.OVERVIEW_FILE, this::getProject));
-            
-            return result;
+            result.addAll(AgentsMdContextItem.itemsFor(agent.getName(), this::getProject));
         }
+        
+        if ((agent instanceof AiPoAgent)) {
+            result.add(new EclipseFileContextItem("docs/memory.md", this::getProject));
+            result.add(new EclipseFileContextItem("docs/index.md", this::getProject));
+        }
+
+        result.addAll(userContext.get());
+
+        return result;
+    }
+    
+    public UserContext getUserContext() {
+        return userContext;
+    }
+
+    /**
+     * Calls the active agent of the current context set
+     */
+    public ChatResponse call(String messageToSend, AiMonitor monitor) {
+        var agent = getActiveAgent();
+        agent.setTurnContextSupplier(() -> get());
+        return agent.call(messageToSend, monitor);
     }
 }
