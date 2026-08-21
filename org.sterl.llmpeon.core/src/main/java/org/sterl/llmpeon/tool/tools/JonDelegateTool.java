@@ -35,9 +35,9 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *
  * <p>
  * <b>Shared memory:</b> the slaves only ever <em>read</em> the shared workspace
- * memory — its content is injected into their standing orders before each
- * dispatch. They cannot write it; only Jon curates the shared memory (and
- * thereby steers the other agents).
+ * memory — its content rides in their system prompt (static context, the same list
+ * Jon's static context is set to). They cannot write it; only Jon curates the shared
+ * memory (and thereby steers the other agents).
  *
  * <p>
  * <b>Working orders:</b> {@code planWithPlanAgent} injects a plan-writing

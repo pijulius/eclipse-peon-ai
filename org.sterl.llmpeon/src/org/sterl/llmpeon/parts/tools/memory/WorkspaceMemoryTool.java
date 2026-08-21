@@ -141,14 +141,15 @@ public class WorkspaceMemoryTool extends AbstractEclipseTool {
 
     public List<ContextItem> get() {
         if (entries.isEmpty()) return List.of();
+        var ls = System.lineSeparator();
 
         StringBuilder sb = new StringBuilder();
-        sb.append("Your memory of rules and guidelines and informations for your work:\n\n");
+        sb.append("Your memory of rules and guidelines and informations for your work:").append(ls).append(ls);
 
         for (int i = 0; i < entries.size(); i++) {
             WorkspaceGuideline g = entries.get(i);
             int displayIndex = i + 1;
-            sb.append(displayIndex).append(". [").append(g.createdAt()).append("] ").append(g.text()).append("\n");
+            sb.append(displayIndex).append(". [").append(g.createdAt()).append("] ").append(g.text()).append(ls);
         }
 
         return List.of(new SimpleContextItem("Agent Memory", sb.toString().trim()));

@@ -1,10 +1,11 @@
 # Standing Orders Design
 
-> **Hinweis 2026-08-15:** Der Dynamic-Context-Flow (was in die Chat History injiziert wird,
-> contains-Check, lazy-loading) ist jetzt in [context-architecture.md](context-architecture.md)
-> dokumentiert. Diese Doc beschreibt den historischen Design und die Compaction-Survival-Mechanik.
-> Potenzial zum Aufräumen: `ToolLoopRequest.standingOrders` ist deprecated, der neue Flow läuft
-> über `turnContextSupplier`.
+> **Superseded (2026-08-21):** `StandingOrdersBuilder` ist gelöscht. Aktueller Flow: Static =
+> Env + Memory im System-Prompt (`PeonAiService.initStaticContext()`, Re-Bake-Trigger in
+> [ADR-0031](adr/0031-static-context-env-plus-memory.md)); Dynamic = Turn-Kontext via
+> `PeonAiService.get()`, gefaltet in die erste UserMessage
+> ([context-architecture.md](context-architecture.md)). Diese Doc bleibt als historische
+> Referenz (Compaction-Survival-Mechanik, KV-Cache-Entscheidungen).
 
 ## Purpose
 

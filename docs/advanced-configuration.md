@@ -52,6 +52,19 @@ AiPlannerService.resolveAgentModel()
 3. **Native support**: LangChain4j supports per-request model override directly
 4. **Lower overhead**: Avoids building and maintaining multiple `ConfiguredChatModel` wrappers
 
+## Agent-Specific Config Umbau (SOLL, 2026-08-21) — ❌ specified, nicht umgesetzt
+
+**SOLL:** Alles konfigurierbar wird **agent-spezifisch** — jeder Agent mit Modell-Slot
+(base/plan/search/compact/PO + Custom Agents) trägt seine eigenen Einstellungen: Modell
+(besteht, Issue #82), Temperature, Think, **JSON extra body** (→ [Prompt Caching](caching.md) —
+Caching läuft als per-agent-JSON, nicht als Provider-Hardcode).
+
+Dazu gehören:
+- Advanced Settings-Eingabe **pro Agent** (inkl. Custom Agents) mit UI-Beispielen unter dem
+  Input (GPT-/Claude-Cache-Snippets).
+- Geltung für jeden Agenten, bei dem ein Modell eingestellt werden kann.
+- Zusammen mit dem Caching-SOLL dokumentiert — **Umsetzung Backlog** (nach der Issue-Runde).
+
 ## First-Launch Directory Resolution
 
 On first launch, AI Peon resolves skills and commands directories:

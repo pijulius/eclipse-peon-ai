@@ -37,3 +37,4 @@ isn't clear from a rule/BDD.
 | [0028](0028-context-item-concept.md) | ContextItem-Konzept — OCP, Agent-besitzter Compact-Flow via `ToolLoopRequest.agent()`, Tool-delegation | Accepted |
 | [0029](0029-file-context-in-history.md) | File-Context (AGENTS.md, memory.md, index.md) in die Chat History statt System-Prompt; Dedup nach vollem Workspace-Pfad (nie nach Content), fehlende Datei → skip | Accepted |
 | [0030](0030-statictext-helper-frozen-chatmessageutil.md) | staticText()-Helper im Plugin statt Core-Fix: ChatMessageUtil.toString() droppt SystemMessages (silent-bug), Core bleibt frozen | Accepted |
+| [0031](0031-static-context-env-plus-memory.md) | Static Context trägt Env + Workspace-Memory im System-Prompt; Re-Bake bei clear/compact/setStaticContext/updateConfig/Reload; Slaven via AiPoAgent-Override; File-Context-Format mit Linenumbers | Accepted |

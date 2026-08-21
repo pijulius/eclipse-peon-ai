@@ -2,6 +2,11 @@
 
 **Status:** Akzeptiert · **Datum:** 2026-08-16 · **Betroffen:** alle Agenten (System-Prompt-Komposition)
 
+> **Superseded-Teil (2026-08-21):** "System-Prompt komplett statisch" und der Header-Format
+> `<pfad>:\n---\n` — siehe [ADR-0031](0031-static-context-env-plus-memory.md) (Static Context trägt
+> jetzt Env+Memory; Render mit Linenumbers, dedupKey `<pfad>:` + LS + ` content with line numbers:`).
+> Das History-Prinzip (Dateien in Chat, Dedup nach Pfad-Header, fehlende Datei → skip) bleibt gültig.
+
 ## Kontext
 
 ADR-0028 legte Datei-Context (AGENTS.md, memory.md, index.md) in den **System-Prompt**
