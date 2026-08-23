@@ -9,6 +9,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.sterl.llmpeon.ai.AiProvider;
 import org.sterl.llmpeon.ai.LlmConfig;
+import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.WriteValidator;
 

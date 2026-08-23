@@ -1,9 +1,12 @@
-package org.sterl.llmpeon.agent;
+package org.sterl.llmpeon.poagent;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.sterl.llmpeon.agent.AbstractAgent;
+import org.sterl.llmpeon.agent.AiPlanAgent;
+import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.AgentConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.context.ContextItem;
@@ -65,7 +68,7 @@ public class AiPoAgent extends AbstractAgent {
     /**
      * Jon's visible slaves for the header status widget (ADR-0025): <b>Da Boss</b> (Jon himself) first,
      * then his ork slaves <b>Da Thinka</b> (Plan) and <b>Da Mek</b> (Dev). Always the same instances
-     * {@code JonDelegateTool} drives, so the widget reads their live {@code isWorking()}/context.
+     * {@code PoDelegateTool} drives, so the widget reads their live {@code isWorking()}/context.
      */
     public List<NamedAgent> getTeam() {
         var team = new ArrayList<NamedAgent>(this.slaves.size() + 1);

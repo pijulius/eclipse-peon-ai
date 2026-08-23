@@ -4,10 +4,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
-import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
 import java.io.IOException;
@@ -22,7 +21,6 @@ import org.sterl.llmpeon.StreamMock;
 import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
-import org.sterl.llmpeon.agent.AiPoAgent;
 import org.sterl.llmpeon.ai.AiProvider;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
@@ -33,6 +31,8 @@ import org.sterl.llmpeon.parts.shared.JdtUtil;
 import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
+import org.sterl.llmpeon.poagent.AiPoAgent;
+import org.sterl.llmpeon.poagent.tools.PoDelegateTool;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
 import org.sterl.llmpeon.scaffold.ReloadConfigTool;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
@@ -40,7 +40,6 @@ import org.sterl.llmpeon.tool.tools.CompactSessionTool;
 import org.sterl.llmpeon.tool.tools.DiskFileReadTool;
 import org.sterl.llmpeon.tool.tools.DiskFileWriteTool;
 import org.sterl.llmpeon.tool.tools.DiskGrepTool;
-import org.sterl.llmpeon.tool.tools.JonDelegateTool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -400,7 +399,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         aiService.setActiveAgent(AiPoAgent.NAME);
         var jon = aiService.getActiveAgent();
 
-        var delegate = jon.getToolService().getTool(JonDelegateTool.class).orElseThrow();
+        var delegate = jon.getToolService().getTool(PoDelegateTool.class).orElseThrow();
         var memoryWrite = delegate.getPlanSlave().getToolService().getExecutor("memoryAdd");
         assertNotNull("memoryAdd executor is present in the shared tool set", memoryWrite);
 
@@ -420,7 +419,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
 
         assertTrue("Jon persists his state", jon.getMemory().isPersistent());
 
-        var delegate = jon.getToolService().getTool(JonDelegateTool.class).orElseThrow();
+        var delegate = jon.getToolService().getTool(PoDelegateTool.class).orElseThrow();
         assertFalse("Plan slave is RAM-only", delegate.getPlanSlave().getMemory().isPersistent());
         assertFalse("Dev slave is RAM-only", delegate.getDevSlave().getMemory().isPersistent());
 
@@ -437,7 +436,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
     public void test_static_context_reaches_jons_slaves() {
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
         aiService.setActiveAgent(AiPoAgent.NAME);
-        var delegate = aiService.getActiveAgent().getToolService().getTool(JonDelegateTool.class).orElseThrow();
+        var delegate = aiService.getActiveAgent().getToolService().getTool(PoDelegateTool.class).orElseThrow();
 
         assertTrue("Plan slave got the static context", !delegate.getPlanSlave().getStaticContext().isEmpty());
         assertTrue("Dev slave got the static context", !delegate.getDevSlave().getStaticContext().isEmpty());
@@ -525,7 +524,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             assertHasNoMessageWith(rendered, "docs/index.md");
 
             // AND: the slaves share Jon's static context (same list object, Env + Memory)
-            var delegate = jon.getToolService().getTool(JonDelegateTool.class).orElseThrow();
+            var delegate = jon.getToolService().getTool(PoDelegateTool.class).orElseThrow();
             assertSame(jon.getStaticContext(), delegate.getPlanSlave().getStaticContext());
             assertSame(jon.getStaticContext(), delegate.getDevSlave().getStaticContext());
         } finally {
@@ -671,7 +670,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
                 .url(mockLlmServer.getUrl()).build());
         mockLlmServer.queueResponse(AiMessage.aiMessage("plan done"));
 
-        var delegate = aiService.getActiveAgent().getToolService().getTool(JonDelegateTool.class).orElseThrow();
+        var delegate = aiService.getActiveAgent().getToolService().getTool(PoDelegateTool.class).orElseThrow();
 
         // WHEN: Jon delegates to his plan slave
         delegate.talkPlan("make a plan");
@@ -691,7 +690,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         // GIVEN: Jon active, a released plan exists, dev slave (Da Mek) is fresh
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
         aiService.setActiveAgent(AiPoAgent.NAME);
-        var delegate = aiService.getActiveAgent().getToolService().getTool(JonDelegateTool.class).orElseThrow();
+        var delegate = aiService.getActiveAgent().getToolService().getTool(PoDelegateTool.class).orElseThrow();
         String planContent = "# Build Plan\n- step 1\n- step 2";
         aiService.getSharedToolService().getTool(PlanTool.class).get().planSave(planContent);
 
@@ -925,7 +924,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             ccm.setChatModel(streamMock.buildOkMock());
             svc.setProject(project);
             svc.setActiveAgent(AiPoAgent.NAME);
-            var delegate = svc.getActiveAgent().getToolService().getTool(JonDelegateTool.class).orElseThrow();
+            var delegate = svc.getActiveAgent().getToolService().getTool(PoDelegateTool.class).orElseThrow();
 
             // AND: LLM-Mock für den Slaven-Call
             svc.updateConfig(svc.getConfig().toBuilder()
@@ -988,8 +987,176 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         }
     }
 
-    // --- helpers for the replica tests ------------------------------------------
+    // --- ADR-0032: Workspace-Memory dynamisch im Turn-Context -------------------
 
+    /** Baut einen Service, nachdem die Memory-Fixture persistiert wurde (deterministisch). */
+    private PeonAiService buildServiceWithPersistedMemory() {
+        var ccm = new ConfiguredChatModel(LlmConfig.builder()
+                .model("test").url("http://localhost:0")
+                .configDir(Path.of(System.getProperty("java.io.tmpdir"), ".peon-test")).build());
+        var svc = new PeonAiService(() -> {}, null, null, null, ccm);
+        svc.setProject(project);
+        svc.clearAll();
+        ccm.setChatModel(streamMock.buildOkMock());
+        svc.setProject(project);
+        return svc;
+    }
+
+    private void useMockLlm(PeonAiService svc) {
+        svc.updateConfig(svc.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+    }
+
+    /**
+     * BDD 1 (ADR-0032): das Workspace-Memory wird pro Turn frisch in den Turn-Context gerendert —
+     * zusätzlich zum statischen Snapshot. Fixture VOR dem SUT-Build persistieren, im finally räumen.
+     */
+    @Test
+    public void test_turnContext_containsFreshMemorySnapshot() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: Memory enthält E1 (persistiert VOR dem Service-Build)
+        var wmt = new WorkspaceMemoryTool();
+        wmt.memoryReset();
+        String entry = "fresh snapshot memory entry";
+        wmt.memoryAdd(entry);
+        try {
+            var svc = buildServiceWithPersistedMemory();
+            svc.setActiveAgent(AiDevAgent.NAME);
+            useMockLlm(svc);
+            mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
+
+            // WHEN: ein Turn beginnt (compact restored den Turn-Context)
+            svc.getActiveAgent().compressContext(null);
+
+            // THEN: UserMessage mit dedupKey-Präfix UND E1
+            var memory = svc.getActiveAgent().getMemory().getCopy();
+            assertHasUserMessageWith(memory, "workspace-memory");
+            assertHasUserMessageWith(memory, entry);
+        } finally {
+            wmt.memoryReset(); // isoliert: Memory nicht in andere Tests/Runs leaken
+        }
+    }
+
+    /**
+     * BDD 2 (ADR-0032): geänderter Memory-Inhalt → neuer dedupKey-Hash → neuer Snapshot wird
+     * injiziert; der alte Snapshot bleibt bis Compact in der History (append-only).
+     */
+    @Test
+    public void test_memoryChange_reinjectsNewSnapshot_keepsOld() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: Snapshot S1 (E1) ist als Turn-Context injiziert
+        var wmt = new WorkspaceMemoryTool();
+        wmt.memoryReset();
+        String e1 = "first memory entry stays until compact";
+        wmt.memoryAdd(e1);
+        try {
+            var svc = buildServiceWithPersistedMemory();
+            svc.setActiveAgent(AiDevAgent.NAME);
+            useMockLlm(svc);
+            mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
+            svc.getActiveAgent().compressContext(null);
+            assertHasUserMessageWith(svc.getActiveAgent().getMemory().getCopy(), e1);
+
+            // WHEN: E2 kommt hinzu und der nächste Turn beginnt — über die LIVE-Instanz des
+            // Service (die test-lokale teilt nur die Prefs, nicht die geladenen entries)
+            String e2 = "second memory entry arrives mid session";
+            svc.getSharedToolService().getTool(WorkspaceMemoryTool.class).orElseThrow().memoryAdd(e2);
+            mockLlmServer.queueResponse(AiMessage.aiMessage("compressed again"));
+            svc.getActiveAgent().getMemory().add(UserMessage.from("turn after change"));
+            svc.getActiveAgent().call(null, null);
+
+            // THEN: neue Message mit E2 (neuer Hash) AND alte Message mit E1 noch vorhanden
+            var memory = svc.getActiveAgent().getMemory().getCopy();
+            assertHasUserMessageWith(memory, e2);
+            assertHasUserMessageWith(memory, e1);
+
+            // AND: der alte Snapshot S1 bleibt unangetastet — genau eine Message mit E1 OHNE E2
+            long oldSnapshotCount = memory.stream()
+                    .map(m -> ChatMessageUtil.toString(m))
+                    .filter(t -> t.contains(e1) && !t.contains(e2))
+                    .count();
+            assertEquals("old snapshot must stay exactly once", 1, oldSnapshotCount);
+        } finally {
+            wmt.memoryReset();
+        }
+    }
+
+    /**
+     * BDD 4 (ADR-0032): leeres Memory → render() == null → das Item wird still übersprungen,
+     * keine Message mit dem dedupKey-Präfix.
+     */
+    @Test
+    public void test_emptyMemory_noMemoryItemInjected() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: leeres Memory
+        var wmt = new WorkspaceMemoryTool();
+        wmt.memoryReset();
+        try {
+            var svc = buildServiceWithPersistedMemory();
+            svc.setActiveAgent(AiDevAgent.NAME);
+            useMockLlm(svc);
+            mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
+
+            // WHEN: ein Turn beginnt
+            svc.getActiveAgent().compressContext(null);
+
+            // THEN: keine Message mit "workspace-memory"
+            assertHasNoUserMessageWith(svc.getActiveAgent().getMemory().getCopy(), "workspace-memory");
+        } finally {
+            wmt.memoryReset();
+        }
+    }
+
+    /**
+     * BDD 3 (ADR-0032, R3): Jons Delegations-Orders tragen den Memory-Snapshot — Plan-Ref +
+     * AGENTS.md + Memory. Der Supplier läuft lazy pro dispatch(), also sieht eine zweite
+     * Delegation nach memoryAdd(E2) den frischen Stand (E2) im Slaven-Kontext.
+     */
+    @Test
+    public void test_slaveOrders_containMemorySnapshot() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: Memory enthält E1 (persistiert VOR dem Service-Build)
+        var wmt = new WorkspaceMemoryTool();
+        wmt.memoryReset();
+        String e1 = "slave orders memory entry";
+        wmt.memoryAdd(e1);
+        try {
+            var svc = buildServiceWithPersistedMemory();
+            svc.setActiveAgent(AiPoAgent.NAME);
+            useMockLlm(svc);
+
+            var delegate = svc.getActiveAgent().getToolService().getTool(PoDelegateTool.class).orElseThrow();
+
+            // WHEN: Jon delegiert an seinen Plan-Slaven
+            mockLlmServer.queueResponse(AiMessage.aiMessage("plan done"));
+            delegate.talkPlan("make a plan");
+
+            // THEN: erste UserMessage des Slaven enthält Plan-Ref + AGENTS.md + E1
+            var firstMsg = delegate.getPlanSlave().getMemory().getCopy().get(0);
+            assertTrue("first message must be a UserMessage", firstMsg instanceof UserMessage);
+            var firstText = ChatMessageUtil.toString(firstMsg);
+            assertContains(firstText, "workspace-memory");   // dedupKey-Präfix des Memory-Snapshots
+            assertContains(firstText, e1);                   // der Snapshot selbst
+
+            // WHEN: E2 kommt hinzu (live Instanz!) und Jon delegiert erneut
+            String e2 = "second delegation sees fresh memory";
+            svc.getSharedToolService().getTool(WorkspaceMemoryTool.class).orElseThrow().memoryAdd(e2);
+            mockLlmServer.queueResponse(AiMessage.aiMessage("plan done again"));
+            delegate.talkPlan("continue planning");
+
+            // THEN: die zweite Delegation sieht E2 (lazy frischer Stand pro dispatch)
+            assertHasUserMessageWith(delegate.getPlanSlave().getMemory().getCopy(), e2);
+        } finally {
+            wmt.memoryReset();
+        }
+    }
+
+    // --- helpers for the replica tests ------------------------------------------
     /** Serialisiert den Memory-Stand zu stabilen Strings (byte-stabiler Vergleich). */
     private List<String> snapshotMemory(AiAgent agent) {
         return agent.getMemory().getCopy().stream()

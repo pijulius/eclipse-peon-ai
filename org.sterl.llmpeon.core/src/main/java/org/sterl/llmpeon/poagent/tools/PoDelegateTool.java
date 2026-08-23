@@ -1,4 +1,4 @@
-package org.sterl.llmpeon.tool.tools;
+package org.sterl.llmpeon.poagent.tools;
 
 import java.util.LinkedList;
 import java.util.List;
@@ -12,6 +12,7 @@ import org.sterl.llmpeon.prompt.PeonPaths;
 import org.sterl.llmpeon.prompt.PromptLoader;
 import org.sterl.llmpeon.shared.ArgsUtil;
 import org.sterl.llmpeon.shared.StringUtil;
+import org.sterl.llmpeon.tool.tools.AbstractTool;
 
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -48,7 +49,7 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  * reviewed after the build before the Dev slave calls planImplemented to
  * archive it (steered by po-delegation.txt).
  */
-public class JonDelegateTool extends AbstractTool {
+public class PoDelegateTool extends AbstractTool {
 
     public static final String TALK_PLAN = "talkPlan";
     public static final String PLAN_WITH_PLAN_AGENT = "planWithPlanAgent";
@@ -79,13 +80,13 @@ public class JonDelegateTool extends AbstractTool {
      */
     private String devPlanPath;
 
-    public JonDelegateTool(NamedAgent plan, NamedAgent dev, Supplier<List<ContextItem>> agentOrders) {
+    public PoDelegateTool(NamedAgent plan, NamedAgent dev, Supplier<List<ContextItem>> agentOrders) {
         this.plan = plan;
         this.dev = dev;
         this.agentOrders = agentOrders;
     }
 
-    @Tool(name = JonDelegateTool.TALK_PLAN, value = "Ask your Peon-Plan team member (Da Thinka) a direct question or discuss an approach — no plan is written. Use planWithPlanAgent when you want the plan itself. Returns the team member's reply.")
+    @Tool(name = PoDelegateTool.TALK_PLAN, value = "Ask your Peon-Plan team member (Da Thinka) a direct question or discuss an approach — no plan is written. Use planWithPlanAgent when you want the plan itself. Returns the team member's reply.")
     public String talkPlan(@P(name = "prompt") String prompt) {
         return dispatch(plan, prompt, agentOrders.get());
     }
@@ -101,7 +102,7 @@ public class JonDelegateTool extends AbstractTool {
                 + System.lineSeparator() + contextUsed(plan.agent());
     }
 
-    @Tool(name = JonDelegateTool.PLAN_WITH_PLAN_AGENT, value = "Have your Peon-Plan team member (Da Thinka) write/refine the plan into "
+    @Tool(name = PoDelegateTool.PLAN_WITH_PLAN_AGENT, value = "Have your Peon-Plan team member (Da Thinka) write/refine the plan into "
             + PeonPaths.PLAN_FILE
             + " with the plan tools, sliced into small green increments; it plans continuously and asks you if something is unclear. Returns the team member's reply.")
     public String planWithPlanAgent(@P(name = "prompt") String prompt) {
@@ -110,12 +111,12 @@ public class JonDelegateTool extends AbstractTool {
         return dispatch(plan, "Plan " + prompt, orders);
     }
 
-    @Tool(name = JonDelegateTool.ASK_DEV, value = "Ask your Peon-Dev team member (Da Mek) a direct question about the code or its progress — no build is triggered. Use buildWithDev to make it implement the plan. Returns the team member's reply.")
+    @Tool(name = PoDelegateTool.ASK_DEV, value = "Ask your Peon-Dev team member (Da Mek) a direct question about the code or its progress — no build is triggered. Use buildWithDev to make it implement the plan. Returns the team member's reply.")
     public String askDev(@P(name = "prompt") String prompt) {
         return dispatch(dev, prompt, agentOrders.get());
     }
 
-    @Tool(name = JonDelegateTool.BUILD_WITH_DEV, 
+    @Tool(name = PoDelegateTool.BUILD_WITH_DEV, 
             value = "Have your Peon-Dev team member (Da Mek) implement the released plan, increment by increment. Pass planPath (" 
                     + PeonPaths.PLAN_FILE
                     + ") — it stays sticky as a standing order so it survives the team member's compaction. Returns the team member's reply.")

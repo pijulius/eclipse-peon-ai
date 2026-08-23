@@ -9,7 +9,6 @@ import org.eclipse.core.resources.IProject;
 import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
-import org.sterl.llmpeon.agent.AiPoAgent;
 import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
@@ -24,10 +23,11 @@ import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
 import org.sterl.llmpeon.parts.tools.PlanReadTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
+import org.sterl.llmpeon.poagent.AiPoAgent;
+import org.sterl.llmpeon.poagent.tools.PoDelegateTool;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
 import org.sterl.llmpeon.tool.tools.CompactSessionTool;
-import org.sterl.llmpeon.tool.tools.JonDelegateTool;
 import org.sterl.llmpeon.tool.tools.SearchAgentTool;
 
 public class BuildPoAgentComponent {
@@ -96,11 +96,15 @@ public class BuildPoAgentComponent {
         var mek = new NamedAgent("Da Mek", devSlave);
         // Slaves also need the same relevant context as the active agent (Jon gets it via userContext).
         // The shared memory rides in their system prompt (static context — re-baked by
-        // PeonAiService.initStaticContext); the turn orders below carry only the plan file + AGENTS.md (ADR-0029).
-        var jonDelegateTool = new JonDelegateTool(thinka, mek, () -> {
+        // PeonAiService.initStaticContext); the turn orders below carry the plan file + AGENTS.md
+        // + the live Workspace-Memory snapshot (ADR-0029, ADR-0032).
+        var jonDelegateTool = new PoDelegateTool(thinka, mek, () -> {
             var orders = new LinkedList<ContextItem>();
             orders.add(new EclipseFileContextItem(PlanTool.OVERVIEW_FILE, projectRef));
             orders.add(new AgentsMdContextItem(projectRef));
+            // Shared memory live per delegation (ADR-0032): the supplier runs lazy per dispatch(),
+            // so the slaves always read the current snapshot (dedupKey carries the entries-hash).
+            orders.add(wmt);
             return orders;
         });
         poToolService.addTool(jonDelegateTool);

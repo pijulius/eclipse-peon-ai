@@ -14,7 +14,6 @@ import org.eclipse.core.runtime.Platform;
 import org.sterl.llmpeon.AgentService;
 import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
-import org.sterl.llmpeon.agent.AiPoAgent;
 import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
@@ -42,6 +41,7 @@ import org.sterl.llmpeon.parts.tools.EclipseWorkspaceReadFileTool;
 import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
+import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
 import org.sterl.llmpeon.scaffold.ReloadConfigTool;
 import org.sterl.llmpeon.shared.AiMonitor;
@@ -167,11 +167,7 @@ public class PeonAiService {
         // into every agent's static context first (new custom agents included), then hand off to the
         // original UI callback — the reload path never goes through updateConfig, so without this the
         // freshly loaded custom agents would miss their system-prompt context.
-        reloadConfigTool = new ReloadConfigTool(agentService, skillService, commandService, config,
-                () -> {
-                    initStaticContext();
-                    if (onAgentReload != null) onAgentReload.run();
-                });
+        reloadConfigTool = new ReloadConfigTool(agentService, skillService, commandService, config, onAgentReload);
         scaffoldAgent.addTool(reloadConfigTool);
 
         // Add scaffold as persistent agent (survives clearAgents on reload)
@@ -205,11 +201,10 @@ public class PeonAiService {
      */
     private void initStaticContext() {
         var env = new StaticContextItem();
-        
+        var context = new ArrayList<ContextItem>();
+        context.add(env);
+
         for (var agent : this.getAgents()) {
-            var context = new ArrayList<ContextItem>();
-            context.add(env);
-            context.addAll(this.workspaceMemoryTool.get());
             agent.setStaticContext(context);
         }
     }
@@ -589,14 +584,16 @@ public class PeonAiService {
             }
             result.addAll(AgentsMdContextItem.itemsFor(agent.getName(), this::getProject));
         }
-        
+
+        // Shared memory live per turn (ADR-0032): the dedupKey carries an entries-hash, so an
+        // unchanged memory is skipped (already in history) while a change reinjects a fresh snapshot.
+        result.add(workspaceMemoryTool);
+
         if ((agent instanceof AiPoAgent)) {
             result.add(new EclipseFileContextItem("docs/memory.md", this::getProject));
             result.add(new EclipseFileContextItem("docs/index.md", this::getProject));
         }
-
         result.addAll(userContext.get());
-
         return result;
     }
     

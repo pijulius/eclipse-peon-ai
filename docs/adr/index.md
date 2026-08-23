@@ -26,7 +26,7 @@ isn't clear from a rule/BDD.
 | [0018](0018-abort-path-parity.md) | Explicitly distinguish success from abort; drain queues safely to memory on failure | Accepted |
 | [0026](0026-extract-question-shell-approval.md) | QuestionOrchestrator + ShellApprovalService aus AIChatView extrahieren — ~70 Zeilen weniger, testbar ohne SWT | Accepted |
 | [0027](0027-osgi-plugin-test-constraints.md) | OSGi Plugin-Tests nutzen JUnit 4 (Eclipse-Runtime); AssertJ bleibt im Maven-core — OSGi-Klassenpfad & Workbench-Startup beachten | Accepted |
-| [0020](0020-po-agent-orchestration.md) | Peon-PO orchestrates Plan/Dev as sub-agents via jon* tools with planComplete/planImplemented completion signals | Proposed |
+| [0020](0020-po-agent-orchestration.md) | Peon-PO orchestrates Plan/Dev as sub-agents via poagent delegate tools (talkPlan/planWithPlanAgent/askDev/buildWithDev) with planComplete/planImplemented completion signals | Accepted |
 | [0021](0021-po-slave-lifecycle-jit-compaction.md) | Peon-PO slave lifecycle (lazy persistent singletons) & just-in-time compaction | Proposed |
 | [0022](0022-write-path-allowlist-decorator.md) | Scope an agent's writes via a write-path-allowlist decorator (comma-separated glob config) | Proposed |
 | [0023](0023-po-model-plan-slot.md) | Jon (Peon-PO) reuses the plan model slot, defaulting to the dev/main model | Accepted |
@@ -37,4 +37,5 @@ isn't clear from a rule/BDD.
 | [0028](0028-context-item-concept.md) | ContextItem-Konzept — OCP, Agent-besitzter Compact-Flow via `ToolLoopRequest.agent()`, Tool-delegation | Accepted |
 | [0029](0029-file-context-in-history.md) | File-Context (AGENTS.md, memory.md, index.md) in die Chat History statt System-Prompt; Dedup nach vollem Workspace-Pfad (nie nach Content), fehlende Datei → skip | Accepted |
 | [0030](0030-statictext-helper-frozen-chatmessageutil.md) | staticText()-Helper im Plugin statt Core-Fix: ChatMessageUtil.toString() droppt SystemMessages (silent-bug), Core bleibt frozen | Accepted |
-| [0031](0031-static-context-env-plus-memory.md) | Static Context trägt Env + Workspace-Memory im System-Prompt; Re-Bake bei clear/compact/setStaticContext/updateConfig/Reload; Slaven via AiPoAgent-Override; File-Context-Format mit Linenumbers | Accepted |
+| [0031](0031-static-context-env-plus-memory.md) | Static Context: Env + Memory-Snapshot im System-Prompt (Memory-Anteil superseded durch ADR-0032); Re-Bake bei clear/compact/setStaticContext/updateConfig/Reload; File-Context-Format mit Linenumbers | Partially superseded |
+| [0032](0032-workspace-memory-dynamic-turn-context.md) | Workspace-Memory dynamisch: WorkspaceMemoryTool als ContextItem pro Turn (aktiver Agent + Delegate-Tool-Orders für Slaven); statischer Snapshot entfernt (Revision) — `PoDelegateTool` (früher JonDelegateTool) | Accepted |

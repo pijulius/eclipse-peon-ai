@@ -1,6 +1,9 @@
 # ADR-0031: Static Context trägt Env + Workspace-Memory (System-Prompt nicht mehr 100% statisch)
 
 **Status:** Akzeptiert · **Datum:** 2026-08-21 · **Betroffen:** alle Agenten (System-Prompt-Komposition, Rebuild-Triggers)
+**Superseded (2026-08-23):** der Workspace-Memory-Anteil wurde durch [ADR-0032](0032-workspace-memory-dynamic-turn-context.md)
+abgelöst — Memory lebt nur noch dynamisch im Turn-Context; Env bleibt statisch. Die Rebuild-Triggers
+und das File-Context-Format bleiben gültig.
 
 ## Kontext
 
@@ -12,13 +15,15 @@ des Memory (`memoryAdd/Replace/Remove`) wirken erst beim nächsten Rebuild — d
 
 ## Entscheidung
 
+> **Ab 2026-08-23 (ADR-0032):** Static Context = nur noch `[Env]`. Der Memory-Snapshot ist aus dem
+> System-Prompt geflogen (reine Duplikation neben dem dynamischen Turn-Item). Historischer Stand:
 - **Static Context = [Env (`StaticContextItem`), Workspace-Memory-Snapshot]** für alle
   `AgentService`-registrierten Agenten — gebacken in `PeonAiService.initStaticContext()`.
 - **Jons Slaven** (nicht in `AgentService` registriert) bekommen dieselbe Liste via
   `AiPoAgent.setStaticContext`-Override (propgt an `slaves`) — env-only Fallback-Content aus
   `BuildPoAgentComponent` wird im vollverdrahteten Betrieb immer überstimmt.
 - **Rebuild-Triggers** (System-Prompt neu gebaut): `clear()`, `compressContext()`,
-  `setStaticContext()`, **neu:** jedes `updateConfig()` (nach `agentService.refresh`) und der
+  `setStaticContext()`, jedes `updateConfig()` (nach `agentService.refresh`) und der
   `ReloadConfigTool`-Pfad (Callback-Wrapper im `PeonAiService`-Konstruktor re-baked nach
   `reloadAgents()`).
 - **Datei-Kontext bleibt in der Chat History** (ADR-0029 in diesem Punkt unverändert).
@@ -28,6 +33,7 @@ des Memory (`memoryAdd/Replace/Remove`) wirken erst beim nächsten Rebuild — d
 
 ## Konsequenzen
 
+> **Ab ADR-0032:** Memory doppelt im Kontext entfällt; Re-Bake betrifft nur noch Env. Historisch:
 - System-Prompt ist nicht mehr 100% statisch (Memory-Snapshot) — der "komplett statisch"-Teil von
   ADR-0029 + context-architecture.md ist in diesem Punkt superseded.
 - Jeder Config-/Reload-Change (Model, Think, `reloadConfig`) re-baked Env+Memory in alle
