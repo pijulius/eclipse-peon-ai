@@ -26,7 +26,7 @@ import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.UserContext;
-import org.sterl.llmpeon.parts.PeonAiService;
+import org.sterl.llmpeon.parts.ai.PeonAiService;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
 import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
@@ -480,17 +480,17 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
     // --- Inc 3: ContextItem Integration Tests ---------------------------------
 
     /**
-     * The static (persistent) context is exactly Env + Workspace-Memory — no file items
-     * (docs/memory.md, docs/index.md, AGENTS.md ride in the turn context, ADR-0029).
-     * Deterministic: the memory entry is persisted BEFORE the service build (the constructor's
-     * updateConfig/initStaticContext bakes the persisted memory into the static context) and is
-     * reset in a finally so it never leaks into other tests/runs.
+     * Revision ADR-0032 (2026-08-23): the static (persistent) context is EXACTLY Env — the
+     * Workspace-Memory snapshot left the system prompt, the memory lives exclusively in the
+     * turn context. No file items either (docs/memory.md, docs/index.md, AGENTS.md ride in the
+     * turn context, ADR-0029). Deterministic: the memory entry is persisted BEFORE the service
+     * build and must NOT leak into the static context; reset in a finally.
      */
     @Test
-    public void test_staticContext_isEnvPlusMemory() {
+    public void test_staticContext_isEnvOnly() {
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
 
-        // GIVEN: a memory entry persisted BEFORE the service build (baked into the static context)
+        // GIVEN: a memory entry persisted BEFORE the service build
         var wmt = new WorkspaceMemoryTool();
         wmt.memoryReset();
         String memoryText = "static context memory entry";
@@ -500,7 +500,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             eclipseWriteFile("docs/memory.md", "# Memory\n- project context");
             eclipseWriteFile("docs/index.md", "# Docs Index\n- feature-x");
 
-            // Frischer Service: updateConfig/initStaticContext backt das persistierte Memory ein.
+            // Frischer Service
             var ccm = new ConfiguredChatModel(LlmConfig.builder()
                     .model("test").url("http://localhost:0")
                     .configDir(Path.of(System.getProperty("java.io.tmpdir"), ".peon-test")).build());
@@ -511,19 +511,19 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             svc.setProject(project);
             svc.setActiveAgent(AiPoAgent.NAME);
 
-            // THEN: Jon's static context is exactly Env + Memory (2 items)
+            // THEN: Jon's static context is exactly Env (1 item) — WITHOUT the memory snapshot
             var jon = svc.getActiveAgent();
             var ctx = jon.getStaticContext();
-            assertEquals(2, ctx.size());
+            assertEquals(1, ctx.size());
             assertContains(ctx.get(0).render(), "prefer eclipse*"); // Env
-            assertContains(ctx.get(1).render(), memoryText);        // Memory
 
-            // AND: no file items (docs/memory.md, docs/index.md) in the static context
+            // AND: no memory snapshot and no file items in the static context
             var rendered = ctx.stream().map(ContextItem::render).filter(r -> r != null).toList();
+            assertHasNoMessageWith(rendered, memoryText);
             assertHasNoMessageWith(rendered, "docs/memory.md");
             assertHasNoMessageWith(rendered, "docs/index.md");
 
-            // AND: the slaves share Jon's static context (same list object, Env + Memory)
+            // AND: the slaves share Jon's static context (same list object, Env only)
             var delegate = jon.getToolService().getTool(PoDelegateTool.class).orElseThrow();
             assertSame(jon.getStaticContext(), delegate.getPlanSlave().getStaticContext());
             assertSame(jon.getStaticContext(), delegate.getDevSlave().getStaticContext());
@@ -532,10 +532,11 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         }
     }
     /**
-     * F2-Delta (issue-03 main scenario): ReloadConfigTool.reloadConfig() calls agentService.reloadAgents()
-     * directly — its callback chain never reaches updateConfig. The PeonAiService constructor wraps the
-     * onAgentReload callback so that after the reload, Env+Memory is re-baked into the static context of
-     * every agent (new custom agents included) and only then the original UI callback fires.
+     * F2-Delta (issue-03 main scenario, ADR-0032 Rev): ReloadConfigTool.reloadConfig() calls
+     * agentService.reloadAgents() directly — its callback chain never reaches updateConfig. The
+     * PeonAiService constructor wraps the onAgentReload callback so that after the reload, Env is
+     * re-baked into the static context of every agent (new custom agents included) and only then
+     * the original UI callback fires. Memory is no longer part of the re-bake (dynamic only).
      */
     @Test
     public void test_reloadConfig_rebakesStaticContext_forNewCustomAgents() throws Exception {
@@ -560,9 +561,8 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             var svc = new PeonAiService(() -> {}, null, null, () -> {
                 // capture at the moment the original UI callback fires: is the re-bake already done?
                 var custom = svcRef.get().getAgentService().get("TestAgent");
-                callbackState.set(custom.isPresent() && custom.get().getStaticContext().stream()
-                        .map(ContextItem::render)
-                        .anyMatch(r -> r != null && r.contains(memoryText)) ? "baked" : "not-baked");
+                callbackState.set(custom.isPresent() && !custom.get().getStaticContext().isEmpty()
+                        ? "baked" : "not-baked");
             }, ccm);
             svcRef.set(svc);
             svc.setProject(project);
@@ -579,12 +579,10 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             var reloadTool = scaffold.getToolService().getTool(ReloadConfigTool.class).orElseThrow();
             reloadTool.reloadConfig();
 
-            // THEN: the new custom agent carries Env + Memory in its static context (system prompt)
+            // THEN: the new custom agent carries Env in its static context (system prompt) — no memory
             var custom = svc.getAgentService().get("TestAgent").orElseThrow();
             var ctx = custom.getStaticContext();
             assertContains(ctx.get(0).render(), "prefer eclipse*"); // Env
-            assertTrue("custom agent static context carries the memory",
-                    ctx.stream().map(ContextItem::render).anyMatch(r -> r != null && r.contains(memoryText)));
 
             // AND: the original callback fired AFTER the re-bake
             assertEquals("baked", callbackState.get());
@@ -893,28 +891,20 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
     }
 
     /**
-     * issue-02 (Slaven-Memory): das Workspace-Memory gelangt als System-Message in beide
-     * Slaven (Da Thinka / Da Mek). Der Slaven-StaticContext wird in {@code initStaticContext()}
-     * (via {@code updateConfig()}) aus dem PERSISTIERTEN Memory gebacken und mit dem PO-Agenten
-     * geteilt. Deshalb persistiert der Test den Eintrag VOR dem Service-Build und räumt ihn im
-     * finally wieder auf — deterministisch, unabhängig vom Workspace-Rest-State.
+     * Revision ADR-0032 (2026-08-23): the slaves' SYSTEM message carries Env only — the shared
+     * memory reaches them via the delegate tool's turn orders (first user message of the slave).
+     * Fixture is persisted BEFORE the service build and reset in the finally (deterministic,
+     * independent of workspace rest-state).
      */
     @Test
-    public void test_slave_systemMessage_contains_workspaceMemory() throws Exception {
-        // GIVEN: das Workspace-Memory wird VOR dem Service-Build persistiert.
-        // Der Slaven-System-Prompt (StaticContext) wird beim Konstruktor-Call
-        // (initStaticContext) aus dem PERSISTIERTEN Memory gebacken und mit dem
-        // PO-Agenten geteilt — ein memoryAdd im Test danach ändert ihn nicht.
-        // Deshalb muss der Eintrag vor dem Build auf der Platte stehen, sonst
-        // hängt das Ergebnis am Workspace-Rest-State (Quelle des Flakes).
+    public void test_slave_memoryInTurnOrders_notInSystemMessage() throws Exception {
+        // GIVEN: das Workspace-Memory wird VOR dem Service-Build persistiert
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
         var wmt = new WorkspaceMemoryTool();
         wmt.memoryReset();
         String memoryText = "Remember: always use tabs, never spaces";
         wmt.memoryAdd(memoryText);
         try {
-            // Frischer Service: sein Konstruktor backt das soeben persistierte
-            // Memory in den (mit dem PO-Agenten geteilten) Slaven-StaticContext.
             var ccm = new ConfiguredChatModel(LlmConfig.builder()
                     .model("test").url("http://localhost:0")
                     .configDir(Path.of(System.getProperty("java.io.tmpdir"), ".peon-test")).build());
@@ -935,15 +925,26 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             // WHEN: Jon delegiert an seinen Plan-Slaven
             delegate.talkPlan("make a plan");
 
-            // THEN (SOLL): das Workspace-Memory ist Teil der SYSTEM-Message des Slaven
-            var systemMessage = extractSystemMessage(mockLlmServer.getLastRequestBody());
-            assertContains(systemMessage, memoryText);
+            // THEN (SOLL): das Memory kommt über die Turn-Orders — erste UserMessage des Slaven
+            var firstMsg = delegate.getPlanSlave().getMemory().getCopy().get(0);
+            assertTrue("first message must be a UserMessage", firstMsg instanceof UserMessage);
+            var firstText = ChatMessageUtil.toString(firstMsg);
+            assertContains(firstText, "workspace-memory");
+            assertContains(firstText, memoryText);
 
-            // AND: der Dev-Slave (Da Mek) trägt dasselbe Memory in seinem StaticContext (System-Prompt)
-            assertTrue("Dev slave static context carries the memory",
-                    delegate.getDevSlave().getStaticContext().stream()
-                            .map(ContextItem::render)
-                            .anyMatch(r -> r != null && r.contains(memoryText)));
+            // AND: die System-Message trägt Env, aber KEINEN Memory-Snapshot mehr
+            var systemMessage = extractSystemMessage(mockLlmServer.getLastRequestBody());
+            assertContains(systemMessage, "prefer eclipse*"); // Env
+            assertFalse("system prompt must not carry the memory snapshot",
+                    systemMessage.contains(memoryText));
+
+            // AND: der Dev-Slave (Da Mek) hat denselben Env-only StaticContext (kein Memory)
+            var devRendered = delegate.getDevSlave().getStaticContext().stream()
+                    .map(ContextItem::render)
+                    .filter(r -> r != null)
+                    .toList();
+            assertHasMessageWith(devRendered, "prefer eclipse*"); // Env
+            assertHasNoMessageWith(devRendered, memoryText);
         } finally {
             wmt.memoryReset(); // isoliert: Memory nicht in andere Tests/Runs leaken
         }

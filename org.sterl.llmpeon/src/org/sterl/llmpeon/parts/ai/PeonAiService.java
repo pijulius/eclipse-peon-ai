@@ -1,4 +1,4 @@
-package org.sterl.llmpeon.parts;
+package org.sterl.llmpeon.parts.ai;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -25,6 +25,7 @@ import org.sterl.llmpeon.context.EclipseFileContextItem;
 import org.sterl.llmpeon.context.SimpleContextItem;
 import org.sterl.llmpeon.context.StaticContextItem;
 import org.sterl.llmpeon.context.UserContext;
+import org.sterl.llmpeon.parts.AIChatView;
 import org.sterl.llmpeon.parts.ai.component.BuildPoAgentComponent;
 import org.sterl.llmpeon.parts.config.LlmPreferenceInitializer;
 import org.sterl.llmpeon.parts.config.McpConnectionService;
@@ -163,11 +164,15 @@ public class PeonAiService {
         scaffoldAgent = new AiScaffoldAgent(configuredModel);
         scaffoldAgent.addTool(new SkillTool(skillService));
         // ReloadConfigTool needs agentService (already created) + skillService + commandService + config.
-        // Its callback fires after the reloadAgents() inside the tool, so wrap it: re-bake Env+Memory
-        // into every agent's static context first (new custom agents included), then hand off to the
-        // original UI callback — the reload path never goes through updateConfig, so without this the
-        // freshly loaded custom agents would miss their system-prompt context.
-        reloadConfigTool = new ReloadConfigTool(agentService, skillService, commandService, config, onAgentReload);
+        // Its callback fires after the reloadAgents() inside the tool, so wrap it: re-bake the Env
+        // static context first (new custom agents included), then hand off to the original UI
+        // callback — the reload path never goes through updateConfig, so without this the freshly
+        // loaded custom agents would have no system-prompt context at all.
+        // (ADR-0032 Rev: memory is dynamic only — the re-bake carries Env exclusively.)
+        reloadConfigTool = new ReloadConfigTool(agentService, skillService, commandService, config, () -> {
+            initStaticContext();
+            if (onAgentReload != null) onAgentReload.run();
+        });
         scaffoldAgent.addTool(reloadConfigTool);
 
         // Add scaffold as persistent agent (survives clearAgents on reload)
@@ -191,7 +196,8 @@ public class PeonAiService {
     
     
     /**
-     * Bakes Env + Workspace-Memory into the static context (system prompt) of every agent.
+     * Bakes the Env info into the static context (system prompt) of every agent — the Workspace-Memory
+     * is NOT part of it anymore (ADR-0032 Rev: dynamic turn-context only).
      * Runs on every {@link #updateConfig(LlmConfig)} and after a scaffold-agent reload (wrapped
      * {@code onAgentReload} callback) — after the agent refresh — so new custom
      * agents receive it too and existing agents get a fresh list (invalidating their cached
@@ -200,9 +206,8 @@ public class PeonAiService {
      * the default supplier is wired once in the constructor.
      */
     private void initStaticContext() {
-        var env = new StaticContextItem();
         var context = new ArrayList<ContextItem>();
-        context.add(env);
+        context.add(new StaticContextItem());
 
         for (var agent : this.getAgents()) {
             agent.setStaticContext(context);
@@ -232,9 +237,9 @@ public class PeonAiService {
         }
         dir = config.getConfigDir().resolve(LlmConfig.AGENT_DIRECTORY);
         agentService.refresh(dir);
-        // After the refresh: (re-)bake Env+Memory into every agent's static context — new custom agents
-        // are included, and existing agents get a fresh list, which invalidates their cached system
-        // prompt so an edited AGENT.md base prompt is picked up on the next turn.
+        // After the refresh: (re-)bake the Env static context — new custom agents are included,
+        // and existing agents get a fresh list, which invalidates their cached system prompt so an
+        // edited AGENT.md base prompt is picked up on the next turn.
         initStaticContext();
     }
 

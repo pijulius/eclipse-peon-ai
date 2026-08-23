@@ -10,7 +10,7 @@
     context-architecture.md, ADR-0029-Superseded-Note, standing-orders-design.md → historisch.
 - **Beobachten:** R2(a)-Rest-Race — nur relevant, falls der Live-Status nach Compact
   doch noch mal klebt (spät gelieferter Monitor-Callback, vgl. context-architecture.md R2).
-- **BUG (User, 2026-08-21) → GELÖST:** `initStaticContext()` im reloadConfigTool-Callback-Wrapper — PeonAiService.java:170. Ursache: Memory war nicht dynamisch. Lösung: [ADR-0032](adr/0032-workspace-memory-dynamic-turn-context.md) — Memory lebt nur noch dynamisch pro Turn; statischer Snapshot entfernt (Revision 2026-08-23, Code durch User). Suite 98/0, NICHT committed.
+- **BUG (User, 2026-08-21) → GELÖST (User-Code, von Da Mek reviewt):** ReloadConfigTool-Callback-Wrapper (PeonAiService) — der Reload-Pfad läuft NICHT durch updateConfig; ohne Re-Bake-Callback bekommen neue Custom Agents keinen Static-Context. ADR-0032 Rev: Memory nur noch dynamisch, Static = Env-only; Wrapper bleibt fürs Env-Re-Bake nötig. Suite 98/0, NICHT committed.
 
 - **Prompt Caching** ([caching.md](caching.md), 🚧): Design fest (2026-08-21, User): Caching als
   **per-agent JSON extra body** in Advanced Settings (auch Custom Agents) + GPT/Claude-Beispiele
