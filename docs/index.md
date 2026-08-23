@@ -5,7 +5,7 @@ notes live in [adr/](adr/index.md). Not published — user-facing docs are in `h
 
 ## Stories
 
-* [Architecture — Component Rules](architecture.md) - Service/Component/View/Widget layering, extraction rules, base packages.
+* [Architecture — Component Rules](architecture.md) - Service/Component/View/Widget layering, extraction rules, base packages. **✅ 2026-08-23:** PeonAiService = Fassade über SharedTools-/AgentContext-/BuildPoAgentComponent.
 * [Context Architecture](context-architecture.md) - static (System-Prompt) vs dynamic (Chat History) — wer bekommt was, lazy-loading, UI reporting. **2026-08-21:** Static trägt Env+Memory — [ADR-0031](adr/0031-static-context-env-plus-memory.md). **2026-08-23 (✅ done):** Workspace-Memory dynamisch pro Turn (auch Sklaven via Delegate-Orders); statischer Snapshot entfernt → Static = nur Env ([ADR-0032](adr/0032-workspace-memory-dynamic-turn-context.md), Code-Umsetzung durch User).
 * [Disk File Write Tool](disk-file-write-tool.md) - real filesystem write/edit tools, configurable workingDir, disabled by default.
 * [Eclipse Workspace Write Tool](eclipse-workspace-write-file-tool.md) - Eclipse VFS write/edit tools, project-scoped sandbox, always available.
@@ -44,6 +44,7 @@ notes live in [adr/](adr/index.md). Not published — user-facing docs are in `h
 
 ## Notes
 
+* [Verbesserungen aus opencode](verbesserungen.md) - **📝 Studie (2026-08-23).** Top 5 Übernahme-Kandidaten aus opencode: Ox-Alpha-Free-Provider, Modell-Katalog, Layered Activation/Onboarding, Secure Credentials + deklarative Auth, Permissions als Daten.
 * [Open to Discuss](open-to-discuss.md) - ambiguous items not clear as bugs or features yet; reviewed end-of-cycle.
 * [Open Ends / Memory](memory.md) - offene Enden des aktuellen Zyklus; nach jedem Plan-Zyklus aufräumen.
 * [ADRs](adr/index.md) - technical decision records (the agent's long-term memory).

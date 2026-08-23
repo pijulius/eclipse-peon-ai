@@ -56,7 +56,9 @@ The 3-bundle layout and the per-module `AGENTS.md` links live in the always-on `
 - runs the Eclipse plugin tests in `org.sterl.llmpeon.test`.
    NOTE: a new test class needs a manual workspace approval by the user and may timeout if he is not watching the tests
          prefere run all tests - which already have a approved workspace configuration 
-   - before a test run call `eclipseBuildProject` to avoid class not found exceptions
+   - before EVERY test run call `eclipseBuildProject` (all changed projects) — stale bundle classes in `bin/`
+     otherwise cause `ClassNotFoundException` / "Unresolved compilation problem" failures, and stale Surefire
+     reports under `target/` mislead the result reading
 - Core module tests: `mvn -pl org.sterl.llmpeon.core test`. Other tests via the Eclipse test runner.
 - Compile-checking the UI plugin against local core changes: build with `-am`
   (`mvn -o -pl org.sterl.llmpeon -am package`). Without `-am` Tycho resolves core from the target
