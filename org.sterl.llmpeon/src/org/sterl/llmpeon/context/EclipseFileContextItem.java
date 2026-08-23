@@ -39,7 +39,7 @@ public class EclipseFileContextItem implements ContextItem {
     public String dedupKey() {
         String key = label();
         if (key == null) return null;
-        return key + " content with line numbers:";
+        return key + ":" + System.lineSeparator() + " content with line numbers:";
     }
 
     @Override

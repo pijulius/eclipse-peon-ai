@@ -28,6 +28,7 @@ import org.sterl.llmpeon.tool.ToolService;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
@@ -210,6 +211,54 @@ class AbstractAgentTest {
         assertThat(devAgent.getQueuedMessageCount()).isZero();
         assertThat(Files.exists(devStore.historyFile())).isFalse();
         assertThat(Files.exists(planStore.historyFile())).isTrue();
+    }
+
+    /**
+     * issue-05 (TODO in AbstractAgent.clear): clear() resets the cached systemMessage — a static
+     * context whose rendered content changed is picked up on the next call. The content is changed
+     * WITHOUT setStaticContext (which would invalidate the cache on its own) so only clear() can
+     * force the rebuild.
+     */
+    @Test
+    void test_clear_resetsSystemPromptCache() {
+        // GIVEN — agent whose static context renders a mutable value
+        var config = LlmConfig.builder().model("mock").build();
+        List<List<ChatMessage>> sent = new ArrayList<>();
+        var mockModel = streamMock.buildMock(r -> {
+            sent.add(new ArrayList<>(r.messages()));
+            return ChatResponse.builder().aiMessage(AiMessage.aiMessage("OK")).build();
+        });
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+        var content = new AtomicReference<>("old context");
+        agent.setStaticContext(List.of((ContextItem) () -> content.get()));
+
+        // WHEN — call 1 builds the system prompt with the old content
+        agent.call("first", monitor -> {});
+
+        // AND — the static context's rendered content changes (no setStaticContext → cache stays)
+        content.set("new context");
+
+        // AND — clear() must invalidate the cached system prompt
+        agent.clear();
+
+        // WHEN — call 2 rebuilds the system prompt
+        agent.call("second", monitor -> {});
+
+        // THEN — call 2's system message carries the NEW content, not the stale one
+        assertThat(systemMessageOf(sent.get(1))).contains("new context").doesNotContain("old context");
+
+        // AND — call 1's system message carried the OLD content
+        assertThat(systemMessageOf(sent.get(0))).contains("old context");
+    }
+
+    /** Extracts the system message text from a captured request. */
+    private static String systemMessageOf(List<ChatMessage> messages) {
+        return messages.stream()
+                .filter(m -> m instanceof SystemMessage)
+                .map(SystemMessage.class::cast)
+                .map(SystemMessage::text)
+                .findFirst()
+                .orElseThrow();
     }
 
     /** By default an agent compacts at the full shared budget (compactFactor 1.0). */

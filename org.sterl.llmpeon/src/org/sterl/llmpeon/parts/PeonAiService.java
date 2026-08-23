@@ -162,8 +162,16 @@ public class PeonAiService {
 
         scaffoldAgent = new AiScaffoldAgent(configuredModel);
         scaffoldAgent.addTool(new SkillTool(skillService));
-        // ReloadConfigTool needs agentService (already created) + skillService + commandService + config
-        reloadConfigTool = new ReloadConfigTool(agentService, skillService, commandService, config, onAgentReload);
+        // ReloadConfigTool needs agentService (already created) + skillService + commandService + config.
+        // Its callback fires after the reloadAgents() inside the tool, so wrap it: re-bake Env+Memory
+        // into every agent's static context first (new custom agents included), then hand off to the
+        // original UI callback — the reload path never goes through updateConfig, so without this the
+        // freshly loaded custom agents would miss their system-prompt context.
+        reloadConfigTool = new ReloadConfigTool(agentService, skillService, commandService, config,
+                () -> {
+                    initStaticContext();
+                    if (onAgentReload != null) onAgentReload.run();
+                });
         scaffoldAgent.addTool(reloadConfigTool);
 
         // Add scaffold as persistent agent (survives clearAgents on reload)
@@ -178,10 +186,23 @@ public class PeonAiService {
         mcpConnectionService = new McpConnectionService(sharedToolService, mcpStateChange);
 
         updateConfig(configuredModel.getConfig());
-        initStaticContext();
+        // Default turn-context supplier for every agent present at construction. New custom agents
+        // (created by a later updateConfig/refresh) receive it via call() before each turn.
+        for (var agent : this.getAgents()) {
+            agent.setTurnContextSupplier(() -> get());
+        }
     }
     
     
+    /**
+     * Bakes Env + Workspace-Memory into the static context (system prompt) of every agent.
+     * Runs on every {@link #updateConfig(LlmConfig)} and after a scaffold-agent reload (wrapped
+     * {@code onAgentReload} callback) — after the agent refresh — so new custom
+     * agents receive it too and existing agents get a fresh list (invalidating their cached
+     * system prompt). Jon's slaves share his list via {@link AiPoAgent#setStaticContext}.
+     * Deliberately does NOT touch the turn-context supplier (that would clobber a custom one);
+     * the default supplier is wired once in the constructor.
+     */
     private void initStaticContext() {
         var env = new StaticContextItem();
         
@@ -190,7 +211,6 @@ public class PeonAiService {
             context.add(env);
             context.addAll(this.workspaceMemoryTool.get());
             agent.setStaticContext(context);
-            agent.setTurnContextSupplier(() -> get());
         }
     }
 
@@ -217,6 +237,10 @@ public class PeonAiService {
         }
         dir = config.getConfigDir().resolve(LlmConfig.AGENT_DIRECTORY);
         agentService.refresh(dir);
+        // After the refresh: (re-)bake Env+Memory into every agent's static context — new custom agents
+        // are included, and existing agents get a fresh list, which invalidates their cached system
+        // prompt so an edited AGENT.md base prompt is picked up on the next turn.
+        initStaticContext();
     }
 
 
@@ -537,23 +561,26 @@ public class PeonAiService {
             result.add(new SimpleContextItem("Scaffold tool names", orders.toString()));
         } else {
             if (_handoffLine == null) {
-                final var plan = getProject().getFile(PlanTool.OVERVIEW_FILE);
-                if (plan != null && plan.exists()) {
-                    result.add(new ContextItem() {
-                        @Override
-                        public String label() {
-                            return "Plan reference " + dedupKey();
-                        }
-                        @Override
-                        public String dedupKey() {
-                            return JdtUtil.pathOf(plan);
-                        }
-                        @Override
-                        public String render() {
-                            if (!plan.exists()) return null;
-                            return "Existing plan found: " + JdtUtil.pathOf(plan);
-                        };
-                    });
+                var project = getProject();
+                if (project != null) {
+                    final var plan = project.getFile(PlanTool.OVERVIEW_FILE);
+                    if (plan != null && plan.exists()) {
+                        result.add(new ContextItem() {
+                            @Override
+                            public String label() {
+                                return "Plan reference " + dedupKey();
+                            }
+                            @Override
+                            public String dedupKey() {
+                                return JdtUtil.pathOf(plan);
+                            }
+                            @Override
+                            public String render() {
+                                if (!plan.exists()) return null;
+                                return "Existing plan found: " + JdtUtil.pathOf(plan);
+                            };
+                        });
+                    }
                 }
             } else {
                 // Consume handoff line once (set by onHandoff, survives compaction)

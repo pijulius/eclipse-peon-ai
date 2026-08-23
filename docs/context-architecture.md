@@ -1,6 +1,6 @@
 # Context Architecture — Static vs Dynamic
 
-**Status:** ✅ done (2026-08-16) · **Datum:** 2026-08-15 · offen: UI-Reporting (❌ specified)
+**Status:** ✅ done (2026-08-21) · **Datum:** 2026-08-15 · offen: UI-Reporting (❌ specified)
 
 ## Purpose
 
@@ -13,7 +13,7 @@ ein einheitlicher Mechanismus: `ContextItem.render()`.
 |---|---|---|
 | **Wo** | System-Prompt | Chat History (UserMessage) |
 | **Wann** | Lazy — beim 1. Turn nach clear/first-call | Lazy — wenn nicht bereits vorhanden (contains-Check) |
-| **Ändert sich?** | Nein (außer Datei auf Disk) | Ja (Command, Skill, Selektion pro Turn) |
+| **Ändert sich?** | Nein (Memory-Snapshot; Rebuild bei clear/compact/config-change, ADR-0031) | Ja (Command, Skill, Selektion pro Turn) |
 | **KV-Cache** | Prefix stabil → Cache-freundlich | Breakt Cache wenn neu |
 | **Überlebt Compact?** | Ja (System-Prompt wird rebuild) | Ja (contains-Check re-injiziert) |
 
@@ -23,13 +23,17 @@ Geladen als `persistentContext: List<ContextItem>` → gerendert in `buildSystem
 
 | Item | Wer | Quelle |
 |------|-----|--------|
-| OS/Date-Regeln (Datum, OS, File-Access) | Alle | `PeonAiService.setStaticContext()` |
+| OS/Date-Regeln (Datum, OS, File-Access) | Alle | `PeonAiService.initStaticContext()` |
+| Workspace-Memory (Regeln/Präferenzen) | Alle inkl. Jons Slaven | `PeonAiService.initStaticContext()` |
 
 **Lazy-Verhalten:** `systemMessage = null` → nächster `call()` baut System-Prompt neu.
-Nach `compressContext()` wird `systemMessage = null` gesetzt → rebuild beim nächsten Turn.
+Rebuild-Trigger: `clear()`, `compressContext()`, `setStaticContext()`, `updateConfig()` (nach
+Agent-Refresh) und der `ReloadConfigTool`-Pfad (ADR-0031).
 **Dateien gehören NICHT hierher** (SOLL 2026-08-16, ✅ 2026-08-16): alles Datei-basierte wandert in die
-Chat History (Dynamic) — der System-Prompt bleibt komplett statisch (KV-Cache) und veraltet bei
-Projektwechsel nicht mehr. Siehe [ADR-0029](adr/0029-file-context-in-history.md).
+Chat History (Dynamic) — veraltet bei Projektwechsel nicht. Das **Workspace-Memory gehört hierher**
+(SOLL 2026-08-21, ADR-0031): Snapshot im System-Prompt; Mid-session-Änderungen wirken erst beim
+nächsten Rebuild (KV-Cache statt Frische — bewusst). Siehe
+[ADR-0029](adr/0029-file-context-in-history.md), [ADR-0031](adr/0031-static-context-env-plus-memory.md).
 
 ## Dynamic Context — Chat History
 
@@ -46,7 +50,6 @@ mit contains-Check (`memory.containsUserMessage(rendered)`).
 | AGENTS-\<agent\>.md | Alle (falls existiert) | `AgentsMdContextItem.itemsFor(agentName, project)` |
 | docs/memory.md | Jon | `EclipseFileContextItem("docs/memory.md")` |
 | docs/index.md | Jon | `EclipseFileContextItem("docs/index.md")` |
-| Shared Memory (memory.md Content) | Slaves | `JonDelegateTool` supplier |
 | Plan-Path (sticky) | Dev Slave | `JonDelegateTool` |
 | Handoff-Line (einmalig) | Dev Agent | `PeonAiService.get()` |
 
@@ -55,6 +58,9 @@ Duplikate. File-Items werden **einmal pro vollem Pfad** injiziert: nie bei Datei
 (Änderungen stehen ohnehin als Tool-Messages in der History), nur bei **anderem Pfad**
 (Projektwechsel) oder **nach Compact** (Memory geleert). Fehlende Datei → `null` → übersprungen,
 keine Exception, kein Status-Eintrag.
+**Format (2026-08-21, ADR-0031):** Render mit Linenumbers (`FileLines.format`); Dedup-Key =
+exakter Header `<pfad>:` + LineSeparator + ` content with line numbers:` — Präfix der injizierten
+Message (Dedup-Prinzip von ADR-0029 unverändert).
 
 ## Bugfix: "Loading 📋"-Zeilen (2026-08-16, ✅ done)
 
@@ -131,12 +137,16 @@ compressContext()
   → systemMessage = null                                    // Force static rebuild
   → restoreTurnContext()                                    // Dynamic re-injection
   → memory.add(summary)
+
+updateConfig() / ReloadConfigTool
+  → agentService.refresh(dir) / reloadAgents()
+  → initStaticContext()                                     // Re-Bake Env+Memory (Cache-Invalidation)
 ```
 
 ## BDD
 
 ```
-GIVEN ein Agent mit persistentContext [OS/Date-Regeln]
+GIVEN ein Agent mit persistentContext [Env, Memory-Snapshot]
 AND systemMessage ist null (first call oder nach compact)
 WHEN call() aufgerufen
 THEN buildSystemPrompt() rendert alle persistentContext Items in den System-Prompt

@@ -38,6 +38,11 @@ public class BuildPoAgentComponent {
     private final LlmConfig config;
     private final Supplier<IProject> projectRef;
     private final ToolService sharedToolService;
+    /**
+     * Fallback static context (env info only) handed to the slaves in {@link #build()}. In fully wired
+     * operation {@code PeonAiService.initStaticContext()} overrides it with Env + Workspace-Memory (the
+     * same list Jon's static context is set to); this list only matters for headless builds without that wiring.
+     */
     private final List<ContextItem> staticContent = List.of(new StaticContextItem());
 
     public BuildPoAgentComponent(ConfiguredChatModel configuredModel,
@@ -59,7 +64,7 @@ public class BuildPoAgentComponent {
         poToolService.addTool(sharedToolService.getTool(EclipseWorkspaceWriteFileTool.class).get());
         poToolService.addTool(sharedToolService.getTool(EclipseGrepTool.class).get());
         // Jon curates the shared memory (write) — he knows it is shared by all agents, so writing it
-        // steers his slaves and the other agents (they only ever READ it, via standing-order injection).
+        // steers his slaves and the other agents (they only ever READ it, via their system prompt / static context).
         var wmt = sharedToolService.getTool(WorkspaceMemoryTool.class).get();
         poToolService.addTool(wmt);
         // Read-only plan access: hasPlan (returns the path) + planRead. Jon reviews & hands the path
@@ -67,8 +72,8 @@ public class BuildPoAgentComponent {
         poToolService.addTool(new PlanReadTool(sharedToolService.getTool(PlanTool.class).get()));
         // Jon's Plan/Dev slaves: RAM-only (2-arg ctor — no history file, ADR-0024), reusing the shared
         // Eclipse tool set. Lazy singletons via the factory so Jon-in-core stays testable headless.
-        // Slaves may READ the shared memory (injected as a standing order) but never WRITE it — strip the
-        // memory-write tool from their effective set; only Jon curates the shared memory.
+        // Slaves may READ the shared memory (injected into their system prompt / static context) but
+        // never WRITE it — strip the memory-write tool from their effective set; only Jon curates it.
         Predicate<SmartToolExecutor> noPrivilegedTools = t -> !(t.getTool() instanceof WorkspaceMemoryTool)
                 && !(t.getTool() instanceof AskUserTool);
         // Eager shared slaves (ADR-0025): created once here and handed — as the same NamedAgent objects —
@@ -89,10 +94,9 @@ public class BuildPoAgentComponent {
 
         var thinka = new NamedAgent("Da Thinka", planSlave);
         var mek = new NamedAgent("Da Mek", devSlave);
-        // Slaves also need the same relevant context as the active agent (Jon gets it via userContext;
-        // they get it folded into their injected standing orders — read-only, like the shared memory):
-        // the shared memory and the selected project. AGENTS-<agent>.md + the plan file ride in via
-        // additionalContext as turn context (ADR-0029).
+        // Slaves also need the same relevant context as the active agent (Jon gets it via userContext).
+        // The shared memory rides in their system prompt (static context — re-baked by
+        // PeonAiService.initStaticContext); the turn orders below carry only the plan file + AGENTS.md (ADR-0029).
         var jonDelegateTool = new JonDelegateTool(thinka, mek, () -> {
             var orders = new LinkedList<ContextItem>();
             orders.add(new EclipseFileContextItem(PlanTool.OVERVIEW_FILE, projectRef));

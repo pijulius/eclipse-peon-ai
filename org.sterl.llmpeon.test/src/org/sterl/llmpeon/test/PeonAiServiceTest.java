@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -13,27 +14,37 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.Before;
 import org.junit.Test;
 import org.sterl.llmpeon.StreamMock;
+import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
 import org.sterl.llmpeon.agent.AiPoAgent;
 import org.sterl.llmpeon.ai.AiProvider;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
+import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.UserContext;
 import org.sterl.llmpeon.parts.PeonAiService;
+import org.sterl.llmpeon.parts.shared.JdtUtil;
 import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
+import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
+import org.sterl.llmpeon.scaffold.ReloadConfigTool;
+import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.tool.tools.CompactSessionTool;
 import org.sterl.llmpeon.tool.tools.DiskFileReadTool;
 import org.sterl.llmpeon.tool.tools.DiskFileWriteTool;
 import org.sterl.llmpeon.tool.tools.DiskGrepTool;
 import org.sterl.llmpeon.tool.tools.JonDelegateTool;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
 
@@ -193,6 +204,14 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         // THEN: handoff succeeded and agent switched
         assertTrue("handoff should succeed with a plan", handedOff);
         assertEquals(AiDevAgent.NAME, aiService.getActiveAgent().getName());
+
+        // AND: plan path + content land in the FIRST user message of the dev agent
+        // (context folded into the user message, not a separate/later one — survives truncateMiddle)
+        var firstMsg = aiService.getActiveAgent().getMemory().getCopy().get(0);
+        assertTrue("first message must be a UserMessage", firstMsg instanceof UserMessage);
+        var firstText = ChatMessageUtil.toString(firstMsg);
+        assertContains(firstText, "peon-plan/overview.md"); // plan path
+        assertContains(firstText, "# Test Plan");           // plan content
 
         // AND: first get() returns the handoff standing order (rendered)
         streamMock.assertCount("Handover from " + AiPlanAgent.NAME, 1);
@@ -461,28 +480,118 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
 
     // --- Inc 3: ContextItem Integration Tests ---------------------------------
 
-    /** ADR-0029: the system prompt is 100% static (OS/date rules) — no file items, on any agent. */
+    /**
+     * The static (persistent) context is exactly Env + Workspace-Memory — no file items
+     * (docs/memory.md, docs/index.md, AGENTS.md ride in the turn context, ADR-0029).
+     * Deterministic: the memory entry is persisted BEFORE the service build (the constructor's
+     * updateConfig/initStaticContext bakes the persisted memory into the static context) and is
+     * reset in a finally so it never leaks into other tests/runs.
+     */
     @Test
-    public void test_persistentContext_isStaticOnly() {
+    public void test_staticContext_isEnvPlusMemory() {
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
-        aiService.setProject(project);
-        aiService.setActiveAgent(AiPoAgent.NAME);
 
-        // GIVEN: memory.md + docs/index.md exist (they must NOT land in the persistent context)
-        eclipseWriteFile("docs/memory.md", "# Memory\n- project context");
-        eclipseWriteFile("docs/index.md", "# Docs Index\n- feature-x");
+        // GIVEN: a memory entry persisted BEFORE the service build (baked into the static context)
+        var wmt = new WorkspaceMemoryTool();
+        wmt.memoryReset();
+        String memoryText = "static context memory entry";
+        wmt.memoryAdd(memoryText);
+        try {
+            // AND: file items that must NOT land in the static context
+            eclipseWriteFile("docs/memory.md", "# Memory\n- project context");
+            eclipseWriteFile("docs/index.md", "# Docs Index\n- feature-x");
 
-        // WHEN
+            // Frischer Service: updateConfig/initStaticContext backt das persistierte Memory ein.
+            var ccm = new ConfiguredChatModel(LlmConfig.builder()
+                    .model("test").url("http://localhost:0")
+                    .configDir(Path.of(System.getProperty("java.io.tmpdir"), ".peon-test")).build());
+            var svc = new PeonAiService(() -> {}, null, null, null, ccm);
+            svc.setProject(project);
+            svc.clearAll();
+            ccm.setChatModel(streamMock.buildOkMock());
+            svc.setProject(project);
+            svc.setActiveAgent(AiPoAgent.NAME);
 
-        // THEN: Jon's persistent context is the static base item only
-        var jon = aiService.getActiveAgent();
-        assertEquals(1, jon.getStaticContext().size());
-        assertContains(jon.getStaticContext().get(0).render(), "prefer eclipse*");
+            // THEN: Jon's static context is exactly Env + Memory (2 items)
+            var jon = svc.getActiveAgent();
+            var ctx = jon.getStaticContext();
+            assertEquals(2, ctx.size());
+            assertContains(ctx.get(0).render(), "prefer eclipse*"); // Env
+            assertContains(ctx.get(1).render(), memoryText);        // Memory
 
-        // AND: the slaves' persistent context is static only, too
-        var delegate = jon.getToolService().getTool(JonDelegateTool.class).orElseThrow();
-        assertEquals(1, delegate.getPlanSlave().getStaticContext().size());
-        assertEquals(1, delegate.getDevSlave().getStaticContext().size());
+            // AND: no file items (docs/memory.md, docs/index.md) in the static context
+            var rendered = ctx.stream().map(ContextItem::render).filter(r -> r != null).toList();
+            assertHasNoMessageWith(rendered, "docs/memory.md");
+            assertHasNoMessageWith(rendered, "docs/index.md");
+
+            // AND: the slaves share Jon's static context (same list object, Env + Memory)
+            var delegate = jon.getToolService().getTool(JonDelegateTool.class).orElseThrow();
+            assertSame(jon.getStaticContext(), delegate.getPlanSlave().getStaticContext());
+            assertSame(jon.getStaticContext(), delegate.getDevSlave().getStaticContext());
+        } finally {
+            wmt.memoryReset(); // isoliert: Memory nicht in andere Tests/Runs leaken
+        }
+    }
+    /**
+     * F2-Delta (issue-03 main scenario): ReloadConfigTool.reloadConfig() calls agentService.reloadAgents()
+     * directly — its callback chain never reaches updateConfig. The PeonAiService constructor wraps the
+     * onAgentReload callback so that after the reload, Env+Memory is re-baked into the static context of
+     * every agent (new custom agents included) and only then the original UI callback fires.
+     */
+    @Test
+    public void test_reloadConfig_rebakesStaticContext_forNewCustomAgents() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: a memory entry persisted BEFORE the service build
+        var wmt = new WorkspaceMemoryTool();
+        wmt.memoryReset();
+        String memoryText = "reload rebake memory entry";
+        wmt.memoryAdd(memoryText);
+        try {
+            // AND: a unique config dir with an agent folder — AGENT.md lands only AFTER the build,
+            // so the custom agent appears exclusively through the reload
+            var configDir = Files.createTempDirectory("peon-reload-test");
+            var agentDir = Files.createDirectories(configDir.resolve(LlmConfig.AGENT_DIRECTORY).resolve("TestAgent"));
+
+            var ccm = new ConfiguredChatModel(LlmConfig.builder()
+                    .model("test").url("http://localhost:0")
+                    .configDir(configDir).build());
+            var svcRef = new AtomicReference<PeonAiService>();
+            var callbackState = new AtomicReference<String>();
+            var svc = new PeonAiService(() -> {}, null, null, () -> {
+                // capture at the moment the original UI callback fires: is the re-bake already done?
+                var custom = svcRef.get().getAgentService().get("TestAgent");
+                callbackState.set(custom.isPresent() && custom.get().getStaticContext().stream()
+                        .map(ContextItem::render)
+                        .anyMatch(r -> r != null && r.contains(memoryText)) ? "baked" : "not-baked");
+            }, ccm);
+            svcRef.set(svc);
+            svc.setProject(project);
+            ccm.setChatModel(streamMock.buildOkMock());
+            assertFalse("custom agent must not exist before the reload",
+                    svc.getAgentService().get("TestAgent").isPresent());
+
+            // AND: the custom agent exists from here on
+            Files.writeString(agentDir.resolve("AGENT.md"),
+                    "---\nread-only: true\ninclude-default: true\n---\nYou are TestAgent.\n");
+
+            // WHEN: the scaffold agent reloads the config (direct reloadAgents() path — NOT updateConfig)
+            var scaffold = svc.getAgentService().get(AiScaffoldAgent.NAME).orElseThrow();
+            var reloadTool = scaffold.getToolService().getTool(ReloadConfigTool.class).orElseThrow();
+            reloadTool.reloadConfig();
+
+            // THEN: the new custom agent carries Env + Memory in its static context (system prompt)
+            var custom = svc.getAgentService().get("TestAgent").orElseThrow();
+            var ctx = custom.getStaticContext();
+            assertContains(ctx.get(0).render(), "prefer eclipse*"); // Env
+            assertTrue("custom agent static context carries the memory",
+                    ctx.stream().map(ContextItem::render).anyMatch(r -> r != null && r.contains(memoryText)));
+
+            // AND: the original callback fired AFTER the re-bake
+            assertEquals("baked", callbackState.get());
+        } finally {
+            wmt.memoryReset(); // isoliert: Memory nicht in andere Tests/Runs leaken
+        }
     }
 
     /** ADR-0029: the turn context carries the project info AND AGENTS.md (no longer in the system prompt). */
@@ -569,6 +678,39 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
 
         // THEN: the plan slave's memory contains the AGENTS.md content (via the additionalContext function)
         assertHasUserMessageWith(delegate.getPlanSlave().getMemory().getCopy(), "# Slave Test Specifics");
+    }
+
+
+    /**
+     * SOLL (truncateMiddle survival): a Jon-Tool dispatch that references a plan must land the plan
+     * (content + path) in the slave's FIRST user message — together with the prompt, not as a
+     * separate/later message — so the plan survives a truncateMiddle compaction in the kept prefix.
+     */
+    @Test
+    public void test_jonToolWithPlan_planInFirstUserMessage() {
+        // GIVEN: Jon active, a released plan exists, dev slave (Da Mek) is fresh
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        var delegate = aiService.getActiveAgent().getToolService().getTool(JonDelegateTool.class).orElseThrow();
+        String planContent = "# Build Plan\n- step 1\n- step 2";
+        aiService.getSharedToolService().getTool(PlanTool.class).get().planSave(planContent);
+
+        // AND: LLM mock for the slave's call
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("build done"));
+
+        // WHEN: Jon dispatches to his dev slave with the plan referenced
+        delegate.buildWithDev("implement the plan", PlanTool.OVERVIEW_FILE);
+
+        // THEN: the dev slave's FIRST user message holds prompt AND plan (content + path)
+        var firstMsg = delegate.getDevSlave().getMemory().getCopy().get(0);
+        assertTrue("first message must be a UserMessage", firstMsg instanceof UserMessage);
+        var firstText = ChatMessageUtil.toString(firstMsg);
+        assertContains(firstText, "implement the plan");    // the prompt
+        assertContains(firstText, "peon-plan/overview.md"); // the plan path
+        assertContains(firstText, "# Build Plan");          // the plan content
     }
 
     // --- ADR-0028: Compact-Delegation Integration Tests -------------------------
@@ -722,5 +864,151 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertHasUserMessageWith(memory, "# Delegation Test");
         assertTrue("AI summary should be in memory", memory.stream()
                 .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("WHAT: Delegated summary")));
+    }
+    // --- Replica tests: issue-01 / issue-02 / KV-cache (append-only) ------------
+
+    /**
+     * issue-01 (NPE-Pfad): ohne ausgewähltes Projekt darf der Turn-Context-Pfad
+     * ({@code PeonAiService.get()}, {@code _handoffLine == null}-Zweig mit
+     * {@code getProject().getFile(PlanTool.OVERVIEW_FILE)}) nicht mit NPE abbrechen —
+     * der Turn läuft einfach ohne Plan-Reference durch.
+     * Erwartet RED (NPE) = Reproduktion des Issues, kein Fehler im Test.
+     */
+    @Test
+    public void test_turnContext_withoutProject_doesNotNpe() {
+        // GIVEN: Dev-Agent aktiv, kein Handoff pending, KEIN Projekt ausgewählt
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        aiService.setActiveAgent(AiDevAgent.NAME);
+        aiService.getActiveAgent().getMemory().clear();
+        aiService.getUserContext().setCurrentProject(null); // -> getProject() == null
+
+        // AND: LLM-Mock, damit der Turn nach dem Turn-Context-Pfad komplett laufen kann
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        mockLlmServer.queueResponse(AiMessage.aiMessage("ok"));
+
+        // WHEN: ein Turn wird getriggert (Turn-Context-Pfad, _handoffLine == null Zweig)
+        // THEN (SOLL): kein NPE — ohne Projekt läuft der Turn ohne Plan-Reference durch
+        aiService.call("hello", null);
+    }
+
+    /**
+     * issue-02 (Slaven-Memory): das Workspace-Memory gelangt als System-Message in beide
+     * Slaven (Da Thinka / Da Mek). Der Slaven-StaticContext wird in {@code initStaticContext()}
+     * (via {@code updateConfig()}) aus dem PERSISTIERTEN Memory gebacken und mit dem PO-Agenten
+     * geteilt. Deshalb persistiert der Test den Eintrag VOR dem Service-Build und räumt ihn im
+     * finally wieder auf — deterministisch, unabhängig vom Workspace-Rest-State.
+     */
+    @Test
+    public void test_slave_systemMessage_contains_workspaceMemory() throws Exception {
+        // GIVEN: das Workspace-Memory wird VOR dem Service-Build persistiert.
+        // Der Slaven-System-Prompt (StaticContext) wird beim Konstruktor-Call
+        // (initStaticContext) aus dem PERSISTIERTEN Memory gebacken und mit dem
+        // PO-Agenten geteilt — ein memoryAdd im Test danach ändert ihn nicht.
+        // Deshalb muss der Eintrag vor dem Build auf der Platte stehen, sonst
+        // hängt das Ergebnis am Workspace-Rest-State (Quelle des Flakes).
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        var wmt = new WorkspaceMemoryTool();
+        wmt.memoryReset();
+        String memoryText = "Remember: always use tabs, never spaces";
+        wmt.memoryAdd(memoryText);
+        try {
+            // Frischer Service: sein Konstruktor backt das soeben persistierte
+            // Memory in den (mit dem PO-Agenten geteilten) Slaven-StaticContext.
+            var ccm = new ConfiguredChatModel(LlmConfig.builder()
+                    .model("test").url("http://localhost:0")
+                    .configDir(Path.of(System.getProperty("java.io.tmpdir"), ".peon-test")).build());
+            var svc = new PeonAiService(() -> {}, null, null, null, ccm);
+            svc.setProject(project);
+            svc.clearAll();
+            ccm.setChatModel(streamMock.buildOkMock());
+            svc.setProject(project);
+            svc.setActiveAgent(AiPoAgent.NAME);
+            var delegate = svc.getActiveAgent().getToolService().getTool(JonDelegateTool.class).orElseThrow();
+
+            // AND: LLM-Mock für den Slaven-Call
+            svc.updateConfig(svc.getConfig().toBuilder()
+                    .providerType(AiProvider.OPEN_AI)
+                    .url(mockLlmServer.getUrl()).build());
+            mockLlmServer.queueResponse(AiMessage.aiMessage("plan done"));
+
+            // WHEN: Jon delegiert an seinen Plan-Slaven
+            delegate.talkPlan("make a plan");
+
+            // THEN (SOLL): das Workspace-Memory ist Teil der SYSTEM-Message des Slaven
+            var systemMessage = extractSystemMessage(mockLlmServer.getLastRequestBody());
+            assertContains(systemMessage, memoryText);
+
+            // AND: der Dev-Slave (Da Mek) trägt dasselbe Memory in seinem StaticContext (System-Prompt)
+            assertTrue("Dev slave static context carries the memory",
+                    delegate.getDevSlave().getStaticContext().stream()
+                            .map(ContextItem::render)
+                            .anyMatch(r -> r != null && r.contains(memoryText)));
+        } finally {
+            wmt.memoryReset(); // isoliert: Memory nicht in andere Tests/Runs leaken
+        }
+    }
+
+    /**
+     * KV-Cache-Regression ("chat"): die Chat-History wird zwischen Turns nicht angefasst —
+     * der bisherige Message-Präfix bleibt byte-stabil (append-only, keine Re-Injektion /
+     * Re-Sortierung / Ersetzung vorhandener Messages). Erwartet GREEN.
+     */
+    @Test
+    public void test_chatHistory_appendOnly_betweenTurns() {
+        // GIVEN: Dev-Agent, leeres Memory, LLM-Mock, Datei für den Tool-Call
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        aiService.setActiveAgent(AiDevAgent.NAME);
+        aiService.getActiveAgent().getMemory().clear();
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+        eclipseWriteFile("t3-file.txt", "tool content");
+
+        // WHEN: Turn 1 — LLM antwortet mit Tool-Call, danach finale Antwort
+        mockLlmServer.queueResponse(AiMessage.from(ToolExecutionRequest.builder()
+                .name("eclipseReadFile")
+                .arguments("{\"filePath\": \"" + JdtUtil.pathOf(project) + "/t3-file.txt\"}")
+                .build()));
+        mockLlmServer.queueResponse(AiMessage.aiMessage("turn1 done"));
+        aiService.call("first message", null);
+        var prefixAfterTurn1 = snapshotMemory(aiService.getActiveAgent());
+
+        // WHEN: Turn 2 — KEIN clear/compact dazwischen
+        mockLlmServer.queueResponse(AiMessage.aiMessage("turn2 done"));
+        aiService.call("second message", null);
+        var memoryAfterTurn2 = snapshotMemory(aiService.getActiveAgent());
+
+        // THEN: der Turn-1-Präfix ist byte-stabil (append-only)
+        assertTrue("history must only grow", memoryAfterTurn2.size() >= prefixAfterTurn1.size());
+        for (int i = 0; i < prefixAfterTurn1.size(); i++) {
+            assertEquals("message at index " + i + " was modified between turns",
+                    prefixAfterTurn1.get(i), memoryAfterTurn2.get(i));
+        }
+    }
+
+    // --- helpers for the replica tests ------------------------------------------
+
+    /** Serialisiert den Memory-Stand zu stabilen Strings (byte-stabiler Vergleich). */
+    private List<String> snapshotMemory(AiAgent agent) {
+        return agent.getMemory().getCopy().stream()
+                .map(m -> ChatMessageUtil.toString(m))
+                .toList();
+    }
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    /** Extrahiert die System-Message (role=system) aus dem letzten LLM-Request-Body. */
+    private String extractSystemMessage(String body) throws Exception {
+        if (body == null) return null;
+        var root = JSON.readTree(body);
+        for (var msg : root.path("messages")) {
+            if ("system".equals(msg.path("role").asText())) {
+                var content = msg.path("content");
+                return content.isTextual() ? content.asText() : content.toString();
+            }
+        }
+        return null;
     }
 }
