@@ -13,7 +13,7 @@ ein einheitlicher Mechanismus: `ContextItem.render()`.
 |---|---|---|
 | **Wo** | System-Prompt | Chat History (UserMessage) |
 | **Wann** | Lazy — beim 1. Turn nach clear/first-call | Lazy — wenn nicht bereits vorhanden (contains-Check) |
-| **Ändert sich?** | Nein (Memory-Snapshot; Rebuild bei clear/compact/config-change, ADR-0031) | Ja (Command, Skill, Selektion pro Turn) |
+| **Ändert sich?** | Nein (nur Env; Rebuild bei clear/compact/config-change, ADR-0031) | Ja (Memory-Snapshot pro Änderung, Command, Skill, Selektion pro Turn) |
 | **KV-Cache** | Prefix stabil → Cache-freundlich | Breakt Cache wenn neu |
 | **Überlebt Compact?** | Ja (System-Prompt wird rebuild) | Ja (contains-Check re-injiziert) |
 
@@ -24,16 +24,64 @@ Geladen als `persistentContext: List<ContextItem>` → gerendert in `buildSystem
 | Item | Wer | Quelle |
 |------|-----|--------|
 | OS/Date-Regeln (Datum, OS, File-Access) | Alle | `PeonAiService.initStaticContext()` |
-| Workspace-Memory (Regeln/Präferenzen) | Alle inkl. Jons Slaven | `PeonAiService.initStaticContext()` |
+
+**Memory ist NICHT mehr hier** (Revision 2026-08-23, ADR-0032): der statische Snapshot wurde
+entfernt — seit dem dynamischen Turn-Item war er reine Duplikation. Static Context = nur noch Env.
 
 **Lazy-Verhalten:** `systemMessage = null` → nächster `call()` baut System-Prompt neu.
 Rebuild-Trigger: `clear()`, `compressContext()`, `setStaticContext()`, `updateConfig()` (nach
 Agent-Refresh) und der `ReloadConfigTool`-Pfad (ADR-0031).
 **Dateien gehören NICHT hierher** (SOLL 2026-08-16, ✅ 2026-08-16): alles Datei-basierte wandert in die
-Chat History (Dynamic) — veraltet bei Projektwechsel nicht. Das **Workspace-Memory gehört hierher**
-(SOLL 2026-08-21, ADR-0031): Snapshot im System-Prompt; Mid-session-Änderungen wirken erst beim
-nächsten Rebuild (KV-Cache statt Frische — bewusst). Siehe
-[ADR-0029](adr/0029-file-context-in-history.md), [ADR-0031](adr/0031-static-context-env-plus-memory.md).
+Chat History (Dynamic) — veraltet bei Projektwechsel nicht. Das **Workspace-Memory gehört auch nicht
+mehr hierher**: ursprünglich als Snapshot gebacken (SOLL 2026-08-21, ADR-0031), mit ADR-0032 erst
+zusätzlich dynamisch, seit der Revision 2026-08-23 **nur noch dynamisch** — siehe Abschnitt unten.
+Siehe [ADR-0029](adr/0029-file-context-in-history.md), [ADR-0031](adr/0031-static-context-env-plus-memory.md),
+[ADR-0032](adr/0032-workspace-memory-dynamic-turn-context.md).
+
+## Workspace-Memory dynamisch im Turn-Context (Revision 2026-08-23, [ADR-0032](adr/0032-workspace-memory-dynamic-turn-context.md))
+
+Das Memory lebt **ausschließlich** dynamisch — zuerst als zusätzliches Item neben dem statischen
+Snapshot (✅ gebaut 2026-08-23), dann per User-Revision **ohne** den Snapshot (nur noch dynamisch;
+Code-Umsetzung durch den User). AGENTS.md-Muster: gleicher dedupKey, geänderter Inhalt → neuer
+Snapshot in der History, alter bleibt bis zum Compact.
+
+- **R1:** `WorkspaceMemoryTool` wird zum `ContextItem` (rendert den aktuellen Memory-Stand,
+  dedupKey = `"workspace-memory#" + hash(entries)` — renderTurnContext-Dedup geht nur auf den Key,
+  daher trägt der Hash die Änderungs-Erkennung).
+- **R2:** Der `turnContextSupplier` (`PeonAiService.get()`) hängt das Item an jeden Turn des
+  aktiven Agenten.
+- **R3:** Die Sklaven (Da Thinka/Da Mek) bekommen ihn über den Orders-Supplier des Delegate-Tools
+  (`PoDelegateTool`, früher `JonDelegateTool`) als drittes Item (nach Plan + AGENTS.md,
+  `BuildPoAgentComponent`) — lazy pro Delegation, das Tool selbst bleibt ihnen entzogen (nur Jon
+  schreibt).
+- **R4 (Revision 2026-08-23):** ~~`initStaticContext()` bäckt weiterhin Env + initialen Snapshot~~ →
+  der statische Snapshot wird **komplett entfernt** (nur noch Env); die Frische kommt ausschließlich
+  aus dem Turn-Context. Damit ist der Bug PeonAiService.java:170 adressiert: der Callback-Hack bleibt
+  als Re-Bake für neue Custom Agents (Env), verliert aber seine Kritikalität.
+- **Nachteil bewusst akzeptiert:** mehr Context (Snapshots sammeln sich bis zum Compact); Vorteil:
+  neue Einträge erreichen aktive Agenten UND Sub-Agenten ohne Re-Bake/Config-Change. Seit der
+  Revision kein Doppel-Anteil mehr: Memory nur 1× im Kontext (Turn-Message), System-Prompt schlanker.
+
+**BDD:**
+```
+GIVEN das Workspace-Memory enthält Eintrag E1
+WHEN ein Turn beginnt
+THEN der aktuelle Memory-Snapshot (inkl. E1) ist als ContextItem in dieser Nachricht
+
+GIVEN ein früherer Turn hat einen Memory-Snapshot injiziert
+AND Jon hat seitdem Eintrag E2 hinzugefügt
+WHEN der nächste Turn beginnt
+THEN ein neuer Snapshot inkl. E2 wird injiziert (gleicher dedupKey)
+AND der alte Snapshot bleibt in der History bis zum Compact
+
+GIVEN Jon delegiert an Da Thinka (buildWithDev/talkPlan)
+WHEN die Orders-Erstnachricht des Slaven gebaut wird
+THEN sie enthält Plan-Referenz + AGENTS.md + den aktuellen Memory-Snapshot
+
+GIVEN das Memory ist leer
+WHEN ein Turn beginnt
+THEN wird kein leeres Memory-Item injiziert
+```
 
 ## Dynamic Context — Chat History
 
@@ -48,6 +96,7 @@ mit contains-Check (`memory.containsUserMessage(rendered)`).
 | Active Skill | Aktiver Agent | One-time via `addOneTimeOrder()` |
 | AGENTS.md | Alle | `AgentsMdContextItem.itemsFor(agentName, project)` |
 | AGENTS-\<agent\>.md | Alle (falls existiert) | `AgentsMdContextItem.itemsFor(agentName, project)` |
+| Workspace-Memory (live, dedupKey = `workspace-memory#` + entries-hash) | Alle inkl. Jons Slaven | `PeonAiService.get()` / `JonDelegateTool`-Orders |
 | docs/memory.md | Jon | `EclipseFileContextItem("docs/memory.md")` |
 | docs/index.md | Jon | `EclipseFileContextItem("docs/index.md")` |
 | Plan-Path (sticky) | Dev Slave | `JonDelegateTool` |

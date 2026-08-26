@@ -9,7 +9,6 @@ import org.eclipse.core.resources.IProject;
 import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
-import org.sterl.llmpeon.agent.AiPoAgent;
 import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
@@ -24,10 +23,11 @@ import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
 import org.sterl.llmpeon.parts.tools.PlanReadTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
+import org.sterl.llmpeon.poagent.AiPoAgent;
+import org.sterl.llmpeon.poagent.tools.PoDelegateTool;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
 import org.sterl.llmpeon.tool.tools.CompactSessionTool;
-import org.sterl.llmpeon.tool.tools.JonDelegateTool;
 import org.sterl.llmpeon.tool.tools.SearchAgentTool;
 
 public class BuildPoAgentComponent {
@@ -40,8 +40,9 @@ public class BuildPoAgentComponent {
     private final ToolService sharedToolService;
     /**
      * Fallback static context (env info only) handed to the slaves in {@link #build()}. In fully wired
-     * operation {@code PeonAiService.initStaticContext()} overrides it with Env + Workspace-Memory (the
-     * same list Jon's static context is set to); this list only matters for headless builds without that wiring.
+     * operation {@code PeonAiService.initStaticContext()} overrides it with the same Env-only list
+     * Jon's static context is set to (memory rides dynamically per turn, ADR-0032 Rev); this list only
+     * matters for headless builds without that wiring.
      */
     private final List<ContextItem> staticContent = List.of(new StaticContextItem());
 
@@ -64,7 +65,8 @@ public class BuildPoAgentComponent {
         poToolService.addTool(sharedToolService.getTool(EclipseWorkspaceWriteFileTool.class).get());
         poToolService.addTool(sharedToolService.getTool(EclipseGrepTool.class).get());
         // Jon curates the shared memory (write) — he knows it is shared by all agents, so writing it
-        // steers his slaves and the other agents (they only ever READ it, via their system prompt / static context).
+        // steers his slaves and the other agents (they only ever READ it, injected per turn / delegation,
+        // ADR-0032 Rev).
         var wmt = sharedToolService.getTool(WorkspaceMemoryTool.class).get();
         poToolService.addTool(wmt);
         // Read-only plan access: hasPlan (returns the path) + planRead. Jon reviews & hands the path
@@ -72,7 +74,7 @@ public class BuildPoAgentComponent {
         poToolService.addTool(new PlanReadTool(sharedToolService.getTool(PlanTool.class).get()));
         // Jon's Plan/Dev slaves: RAM-only (2-arg ctor — no history file, ADR-0024), reusing the shared
         // Eclipse tool set. Lazy singletons via the factory so Jon-in-core stays testable headless.
-        // Slaves may READ the shared memory (injected into their system prompt / static context) but
+        // Slaves may READ the shared memory (injected into their turn orders per delegation) but
         // never WRITE it — strip the memory-write tool from their effective set; only Jon curates it.
         Predicate<SmartToolExecutor> noPrivilegedTools = t -> !(t.getTool() instanceof WorkspaceMemoryTool)
                 && !(t.getTool() instanceof AskUserTool);
@@ -96,11 +98,15 @@ public class BuildPoAgentComponent {
         var mek = new NamedAgent("Da Mek", devSlave);
         // Slaves also need the same relevant context as the active agent (Jon gets it via userContext).
         // The shared memory rides in their system prompt (static context — re-baked by
-        // PeonAiService.initStaticContext); the turn orders below carry only the plan file + AGENTS.md (ADR-0029).
-        var jonDelegateTool = new JonDelegateTool(thinka, mek, () -> {
+        // PeonAiService.initStaticContext); the turn orders below carry the plan file + AGENTS.md
+        // + the live Workspace-Memory snapshot (ADR-0029, ADR-0032).
+        var jonDelegateTool = new PoDelegateTool(thinka, mek, () -> {
             var orders = new LinkedList<ContextItem>();
             orders.add(new EclipseFileContextItem(PlanTool.OVERVIEW_FILE, projectRef));
             orders.add(new AgentsMdContextItem(projectRef));
+            // Shared memory live per delegation (ADR-0032): the supplier runs lazy per dispatch(),
+            // so the slaves always read the current snapshot (dedupKey carries the entries-hash).
+            orders.add(wmt);
             return orders;
         });
         poToolService.addTool(jonDelegateTool);

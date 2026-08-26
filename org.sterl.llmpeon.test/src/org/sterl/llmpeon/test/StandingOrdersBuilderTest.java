@@ -16,7 +16,7 @@ import org.sterl.llmpeon.agent.AiPlanAgent;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.context.SimpleContextItem;
-import org.sterl.llmpeon.parts.PeonAiService;
+import org.sterl.llmpeon.parts.ai.PeonAiService;
 import org.sterl.llmpeon.parts.shared.EclipseUtil;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;

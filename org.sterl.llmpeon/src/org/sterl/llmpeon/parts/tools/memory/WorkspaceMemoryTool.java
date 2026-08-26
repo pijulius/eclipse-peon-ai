@@ -20,7 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 
-public class WorkspaceMemoryTool extends AbstractEclipseTool {
+public class WorkspaceMemoryTool extends AbstractEclipseTool implements ContextItem {
 
     private static final String PREF_KEY = "workspaceGuidelineMemory";
     private static final int MAX_ENTRIES = 200;
@@ -139,8 +139,25 @@ public class WorkspaceMemoryTool extends AbstractEclipseTool {
         }
     }
 
-    public List<ContextItem> get() {
-        if (entries.isEmpty()) return List.of();
+    /**
+     * Content-hash suffix (ADR-0032): unchanged entries keep the key (already in history -> skipped,
+     * no duplicate), changed entries produce a new key -> a fresh snapshot is injected while the old
+     * one stays in the history until compact.
+     */
+    @Override
+    public String dedupKey() {
+        if (entries.isEmpty()) return null;
+        return "workspace-memory#" + Integer.toHexString(entries.hashCode());
+    }
+
+    @Override
+    public String label() {
+        return "Agent Memory";
+    }
+
+    @Override
+    public String render() {
+        if (entries.isEmpty()) return null;
         var ls = System.lineSeparator();
 
         StringBuilder sb = new StringBuilder();
@@ -152,6 +169,11 @@ public class WorkspaceMemoryTool extends AbstractEclipseTool {
             sb.append(displayIndex).append(". [").append(g.createdAt()).append("] ").append(g.text()).append(ls);
         }
 
-        return List.of(new SimpleContextItem("Agent Memory", sb.toString().trim()));
+        return sb.toString().trim();
+    }
+
+    public List<ContextItem> get() {
+        String rendered = render();
+        return rendered == null ? List.of() : List.of(new SimpleContextItem(label(), rendered));
     }
 }

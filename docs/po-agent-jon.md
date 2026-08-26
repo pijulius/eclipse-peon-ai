@@ -4,7 +4,8 @@
 
 A docs-owning **business-owner agent** — identity **"Jon"**, shown as **`Peon-PO`** in the agent
 dropdown. Jon designs features together with the user directly in `docs/`, then drives their
-implementation by orchestrating his **own** Peon-Plan and Peon-Dev instances through `jon*` tools.
+implementation by orchestrating his **own** Peon-Plan and Peon-Dev instances through `poagent` tools
+(`talkPlan`/`planWithPlanAgent`/`askDev`/`buildWithDev` — früher `jon*` tools genannt).
 He owns the WHAT (the docs); the plan and the code are delegated work he never touches himself.
 
 Jon is a **skeptical, critical guardian of the docs**: he keeps them coherent ("round"), always
@@ -14,8 +15,9 @@ lifting. A question he cannot answer from the docs he **escalates to the user** 
 
 This story is the design; rules are marked **✅** where built, **❌** where still backlog.
 
-**100 % additive.** Peon-PO only *adds* — a new agent, the `jon*` tools, the slave-side completion
-signals (`planComplete` / `planImplemented`) and the write-allowlist decorator. It changes **nothing** in the standalone Peon-Plan / Peon-Dev /
+**100 % additive.** Peon-PO only *adds* — a new agent, the `poagent` delegate tools, the slave-side
+completion signals (`planComplete` / `planImplemented`) and the write-allowlist decorator. It changes
+**nothing** in the standalone Peon-Plan / Peon-Dev /
 Peon-Scaffold agents or in today's button handoff. Jon lives in the **`core`** module and is therefore
 **fully testable in core** with the headless disk tools; the Eclipse plugin only **injects the
 Eclipse-workspace tools** (behind the same write wrapper). Jon **never gets a shell** — in any layer.
@@ -88,7 +90,7 @@ THEN bekommt er memory.md NICHT automatisch injiziert
 
 ## Increment 2 — chat-based delegation (happy path) ✅
 
-**Built & green** (core `JonDelegateToolTest` + `AiPoAgentTest`; the plugin wiring asserts in
+**Built & green** (core `PoDelegateToolTest`, früher `JonDelegateToolTest` + `AiPoAgentTest`; the plugin wiring asserts in
 `PeonAiServiceTest` run only inside a live Eclipse workspace, like every other `PeonAiServiceTest`).
 
 R1–R14 above are the **full vision** (completion signals, non-blocking queue, header status, error
@@ -97,13 +99,14 @@ plan/dev work to **his own** Plan and Da Mek (Peon-Dev) and get their answers ba
 completion signals, happy-path only**. It deliberately **defers** R8 (signals), R10 (compaction),
 R11 (queue/non-block), R12 (header) and R14 (error handling) to a later Increment 3.
 
-The `jon*` tool **substrate is already in place**: Jon has his docs-only `ToolService` and his writes
+The `poagent` tool **substrate is already in place**: Jon has his docs-only `ToolService` and his writes
 are gated (`WriteValidator.DOCS`, built). What this increment adds are the two **delegate tools** plus
 Da Thinka and Da Mek behind them.
 
 ### I2.1: Four delegate tools + `searchAgent` ✅
 Da Thinka and Da Mek were named by **intent** rather than by role: a *talk* verb and a *do* verb per slave,
-because "ask a question" and "produce the artefact" want different standing orders. `JonDelegateTool`
+because "ask a question" and "produce the artefact" want different standing orders. `PoDelegateTool`
+(früher `JonDelegateTool`, Package `org.sterl.llmpeon.poagent`)
 exposes four (renamed from the original `jonAskPlan`/`jonAskDev` cut); each drives **one** of Jon's
 slaves for **one turn** via `slave.call(prompt, monitor)` (modeled on `SearchAgentTool`, but against a
 **persistent** slave so its RAM memory is reused across calls). The slave's reply is the **tool
@@ -124,7 +127,7 @@ Jon additionally gets `searchAgent` (the existing stateless `SearchAgentTool`, "
 throw-away research sub-agent for multi-step lookups, so discovery does not burn his own context.
 
 **No completion signals on the delegate tools.** There is no `planComplete` / `planImplemented` on
-`JonDelegateTool`. Control returns to Jon on every team member turn anyway (natural stop), and Jon decides
+`PoDelegateTool`. Control returns to Jon on every team member turn anyway (natural stop), and Jon decides
 *"done vs. still working"* **from the reply text** himself (I2.3); Da Mek (Peon-Dev) owns
 `planImplemented` and archives only after Jon's post-build review passes.
 
@@ -320,7 +323,9 @@ AND the default active agent is still Peon-Dev
 
 ### R2: ToolService — reuse existing file tools behind a write-allowlist ✅
 Jon has his own `ToolService(false)` (no default-tool leakage, like Peon-Scaffold) holding:
-(Tool-Names heute: `talkPlan` / `planWithPlanAgent`, `askDev` / `buildWithDev`, `searchAgent` — I2.1.)
+(Tool-Names heute: `talkPlan` / `planWithPlanAgent`, `askDev` / `buildWithDev`, `searchAgent` — I2.1.
+Historische Namen `jonCreateDevPlan`/`jonAskQuestion`/`jonAskDev` → heute
+`planWithPlanAgent`/`talkPlan`/`askDev`.)
 
 - `jonCreateDevPlan`, `jonAskQuestion` — both drive the **same** persistent Da Thinka (Peon-Plan) (R9),
   distinct tool names for distinct intent: `jonCreateDevPlan` runs the full planning workflow (the plan
@@ -451,7 +456,7 @@ After releasing the plan Jon calls `buildWithDev`.
 **Jon owns his own standing-order logic.** With Jon in **core**, the Eclipse-only `onHandoff` /
 `_handoffLine` path (it uses `JdtUtil.pathOf(IFile)`) is unavailable — so Jon does **not** reuse it.
 Instead, on every dispatch Jon feeds Da Thinka and Da Mek context as **standing orders** through the
-`JonDelegateTool` additional-context supplier (`setAdditionalContext`), while his actual prompt rides
+`PoDelegateTool` additional-context supplier (`setAdditionalContext`), while his actual prompt rides
 in as a normal **chat
 message**. The key standing order is the **plan link**, once a plan exists. **Da Thinka and Da Mek** are handled
 the same way: `plan link` (standing order) **+** Jon's question (chat message).
@@ -472,7 +477,7 @@ small changes Jon reviews inline; the dedicated Reviewer agent stays a future ex
 **BDD:**
 ```
 GIVEN Jon calls jonAskDev with a released plan
-THEN Jon sets a standing order (via the JonDelegateTool additional-context supplier) carrying the plan link plus the instruction to call planImplemented() when done, and his prompt arrives as a chat message
+THEN Jon sets a standing order (via the PoDelegateTool additional-context supplier) carrying the plan link plus the instruction to call planImplemented() when done, and his prompt arrives as a chat message
 AND Jon's own AGENTS-PO.md standing orders are NOT forwarded to the Dev slave
 
 GIVEN the Dev agent calls planImplemented()
@@ -694,8 +699,9 @@ THEN he resumes the same persistent slave via jonCreateDevPlan / jonAskDev carry
 Two failure origins must be told apart — and the existing framework already handles them, so the MVP
 adds **no** error plumbing, only a **guardrail standing order**:
 
-**(a) Slave technical failure — `jon*` tools are "agent tools" and deviate from the normal tool error
-contract.**
+**(a) Slave technical failure — `poagent` delegate tools are "agent tools" and deviate from the normal tool error
+contract.** *(Tool-Ergebnisse: `jon*`-Namen in den BDDs unten sind historisch — gemeint sind die
+Delegate-Tools.)*
 
 *The normal contract, which we do NOT touch.* A standard tool signals a **typical AI error** by
 throwing `IllegalArgumentException`; the framework's `SmartToolExecutor` catches it, reports it via
@@ -706,8 +712,8 @@ the contract lives in `SmartToolExecutor` — a small `tools.md` could capture i
 
 *Why Jon's tools differ.* For a normal tool the ultimate sink of an unexpected error is the **human
 UI**. But when Jon drives a slave, **Jon _is_ the UI** — a slave failure must land at **Jon**, not
-escape past him into the ToolService default handler and on to the real UI. So the `jon*` "agent tools"
-**catch every exception themselves** and:
+escape past him into the ToolService default handler and on to the real UI. So the `poagent` delegate
+tools **catch every exception themselves** and:
 
 - **report it via `monitor.onProblem(...)`** — the user sees it live; and
 - **return it to Jon as the tool result**, carrying: the **caught exception's message**, the **root
@@ -720,7 +726,7 @@ see exactly the same**; the full stacktrace stays in the log only. e.g. *"Da Thi
 an error — its state may have changed. Caught: `<msg>`. Root cause: `<root msg>` / `<first ~5 stack
 lines>`. Inform the user; do not retry."*
 
-Because a `jon*` tool **always returns** (it never throws), its `tool_use` always gets a matching
+Because a delegate tool **always returns** (it never throws), its `tool_use` always gets a matching
 `tool_result` — **no dangling `tool_use` by construction** — and the `ToolService`'s generic error
 handling (the `SmartToolExecutor` `IllegalArgumentException` path) **never comes into play** for these
 tools; we handle the error *inside* the tool rather than handing it to the default handler. Per his
@@ -747,8 +753,8 @@ handling** (rate-limit backoff, or a *summarised* retry so Jon can adapt) are de
 
 **BDD:**
 ```
-GIVEN Jon called jonCreateDevPlan and the Plan slave throws a timeout mid-plan
-THEN the jon* tool CATCHES it itself (the ToolService default error handler never fires) and builds a concise message (caught message + root-cause message + first ~5 stack lines + "slave ran into an error, state may have changed")
+GIVEN Jon called planWithPlanAgent and the Plan slave throws a timeout mid-plan
+THEN the delegate tool CATCHES it itself (the ToolService default error handler never fires) and builds a concise message (caught message + root-cause message + first ~5 stack lines + "slave ran into an error, state may have changed")
 AND it returns that message as the tool_result AND pushes the SAME string via monitor.onProblem so the user sees exactly what Jon sees
 AND because the tool returns (never throws), the tool_use/tool_result pair is well-formed (no dangling tool_use)
 AND Jon summarises the failure to the user and does not silently retry
@@ -786,8 +792,8 @@ THEN it is a normal tool result (R8), not treated as an error
 
 ## ADRs
 
-- [ADR-0020](adr/0020-po-agent-orchestration.md) — Jon orchestrates Plan/Dev as sub-agents via `jon*`
-  tools with `planComplete` / `planImplemented` completion signals (vs. the one-shot button handoff).
+- [ADR-0020](adr/0020-po-agent-orchestration.md) — Jon orchestrates Plan/Dev as sub-agents via the
+  poagent delegate tools with `planComplete` / `planImplemented` completion signals (vs. the one-shot button handoff).
 - [ADR-0021](adr/0021-po-slave-lifecycle-jit-compaction.md) — team member lifecycle (eager persistent
   singletons) & just-in-time compaction with standing-order survival.
 - [ADR-0022](adr/0022-write-path-allowlist-decorator.md) — no bespoke Jon tools; the existing write

@@ -10,13 +10,18 @@
     context-architecture.md, ADR-0029-Superseded-Note, standing-orders-design.md → historisch.
 - **Beobachten:** R2(a)-Rest-Race — nur relevant, falls der Live-Status nach Compact
   doch noch mal klebt (spät gelieferter Monitor-Callback, vgl. context-architecture.md R2).
-- **Prompt Caching** ([caching.md](caching.md), 🚧): Neues Design (2026-08-21, User): Caching als
+- **BUG (User, 2026-08-21) → GELÖST (User-Code, von Da Mek reviewt):** ReloadConfigTool-Callback-Wrapper (PeonAiService) — der Reload-Pfad läuft NICHT durch updateConfig; ohne Re-Bake-Callback bekommen neue Custom Agents keinen Static-Context. ADR-0032 Rev: Memory nur noch dynamisch, Static = Env-only; Wrapper bleibt fürs Env-Re-Bake nötig. Suite 98/0, NICHT committed.
+
+- **Prompt Caching** ([caching.md](caching.md), 🚧): Design fest (2026-08-21, User): Caching als
   **per-agent JSON extra body** in Advanced Settings (auch Custom Agents) + GPT/Claude-Beispiele
-  in der UI + gilt für jeden Agenten mit Modell-Slot; llama.cpp: kein Snippet = kein Slot
-  (Compact-Agent); Abgleich über Usage-Cache-Tokens. Dazu SOLL agent-spezifischer Config-Umbau
-  (advanced-configuration.md). Ist-Hardcode in `AiProvider` (Anthropic flags, OpenAI-Claude
-  cache_control) durch SOLL ersetzt. Umsetzung **nach der Issue-Runde**. Offene Fragen:
-  Hardcode-Flatten, Merge-Semantik, Abgleich-Kanal.
+  in der UI + gilt für jeden Agenten mit Modell-Slot; **Hardcode-Flatten: alles extra body**
+  (Anthropic-Flags/OpenAI-`cache_control` werden zu UI-Beispielen); **Provider-Fähigkeits-Gate**:
+  Boolean in `AiProvider`, UI-Input nur wo unterstützt; llama.cpp: kein Snippet = kein Slot
+  (Compact-Agent); Abgleich über Usage-Cache-Tokens; **Provider-Umbau eigene Doku**
+  ([provider.md](provider.md): `AiProvider`-Enum → eigene Komponente, je Provider eine Klasse,
+  `supportsExtraBody()` je Provider-Klasse, verhaltenstreu). Dazu SOLL agent-spezifischer
+  Config-Umbau (advanced-configuration.md). Umsetzung **nach der Issue-Runde**. Offene Fragen:
+  Provider-Unterstützung (langchain4j `customParameters`), Merge-Semantik, Abgleich-Kanal.
 
 # Geschlossen
 

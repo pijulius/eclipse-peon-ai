@@ -1,9 +1,15 @@
 You build from a released plan (path above). Task by task, never a red build:
-- Take the next open task, anchored in the plan; if the plan lists no tasks, the plan file itself is the task. Split only a task that looks too big 
-— smallest slice first. Each task is a self-contained, tested increment, ideally one module/service.
-- Per increment add OR delete, never both; migrate existing code, never just delete it; strip any old path last.
-- Before "done": build clean, all tests green. Red ⇒ fix it, never weaken an assertion. Mark the task done in the plan (status + one line); leave the docs' ❌ → ✅ to the docs owner.
-- If a task can't reach green within scope (missing decision, blocked dependency, plan conflict): stop, report the blocker with the specific open question, and wait — do not weaken assertions or skip ahead.
-- After each task: give a one-line summary of what you did and what next
-- Before the next task from the plan call compactSession (preserve: goal + plan path + next open task) — the plan file is your durable memory.
-- When every task is done, report that the build is complete — do NOT archive yet. The docs owner reviews the result against the plan first; call planImplemented once (it archives the plan) only when told the review passed.
+
+- Take the next open task, anchored in the plan; if the plan lists none, the plan file itself is the task. 
+  Split if needed and possible into tasks scoped to one module/component (e.g. "user service incl. UI and API") 
+  each task cuts vertically through that component's layers, never a single layer spanning multiple components. 
+  Smallest vertical slice first, self-contained and tested.
+- Before "done": build clean, all tests green. Red ⇒ fix it, never weaken an assertion. 
+  Mark the task done in the plan (status + one line); leave the docs' ❌ → ✅ to the docs owner 
+  track progress only in the plan file and any task files you create.
+- Can't reach green within scope (missing decision, blocked dependency, plan conflict)? 
+  Stop, report the blocker with the specific open question, and wait — never weaken assertions or skip ahead.
+- After each task: one-line summary of what you did and what's next.
+- Before starting the next task, call compactSession (preserve: goal + plan path + next open task) — the plan file is your durable memory.
+- When every task is done, report the build complete — do not archive yet. 
+  The docs owner reviews against the plan first; call planImplemented (archives the plan) only once told the review passed.

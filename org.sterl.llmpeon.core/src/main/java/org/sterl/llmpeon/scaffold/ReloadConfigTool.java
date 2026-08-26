@@ -64,7 +64,9 @@ public class ReloadConfigTool extends AbstractTool {
 
         // Fire callback after ALL services succeeded
         if (onReload != null) {
-            try { onReload.run(); } catch (Exception e) { /* reload succeeded, callback failure is non-critical */ }
+            try { onReload.run(); } catch (Exception e) { 
+                return "Reload error " + e.getMessage();
+            }
         }
         return result;
     }

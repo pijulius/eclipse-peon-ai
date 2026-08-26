@@ -14,7 +14,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.sterl.llmpeon.agent.NamedAgent;
-import org.sterl.llmpeon.parts.PeonAiService.ToolStatus;
+import org.sterl.llmpeon.parts.ai.PeonAiService.ToolStatus;
 import org.sterl.llmpeon.parts.shared.EclipseUiUtil;
 import org.sterl.llmpeon.parts.shared.ImageUtil;
 import org.sterl.llmpeon.parts.shared.SwtUtil;

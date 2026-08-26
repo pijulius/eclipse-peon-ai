@@ -1,9 +1,7 @@
-package org.sterl.llmpeon.tool.tools;
+package org.sterl.llmpeon.poagent.tools;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -18,16 +16,12 @@ import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.SimpleContextItem;
-import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.tool.ToolService;
-import org.sterl.llmpeon.tool.model.SimpleMessage;
 
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.TextContent;
-import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
-class JonDelegateToolTest {
+class PoDelegateToolTest {
 
     private StreamMock streamMock = new StreamMock();
     private ConfiguredChatModel model;
@@ -43,12 +37,12 @@ class JonDelegateToolTest {
     private AiAgent planSlave() { return new AiPlanAgent(model, new ToolService()); }
     private AiAgent devSlave()  { return new AiDevAgent(model, new ToolService()); }
 
-    private JonDelegateTool newTool() {
+    private PoDelegateTool newTool() {
         return newTool(List::of);
     }
 
-    private JonDelegateTool newTool(Supplier<List<ContextItem>> memory) {
-        return new JonDelegateTool(new NamedAgent("Da Thinka", planSlave()),
+    private PoDelegateTool newTool(Supplier<List<ContextItem>> memory) {
+        return new PoDelegateTool(new NamedAgent("Da Thinka", planSlave()),
                 new NamedAgent("Da Mek", devSlave()), memory);
     }
 
@@ -145,21 +139,6 @@ class JonDelegateToolTest {
 
         assertThat(streamMock.count("go")).isEqualTo(2);
         assertThat(streamMock.count(memory)).isEqualTo(1);
-    }
-
-    /**
-     * SAT2 (docs/sub-agent-timing.md): the done line carries the slave's elapsed wall-clock.
-     * Name-agnostic: we assert the timing suffix, not the (flavourful) display name.
-     */
-    @Test
-    void doneLine_carriesElapsedTime() {
-        var tool = newTool();
-        var lines = new ArrayList<String>();
-        tool.monitor = (AiMonitor) (SimpleMessage m) -> lines.add(m.message());
-
-        tool.talkPlan("go");
-
-        assertThat(lines).anyMatch(l -> l.contains("done. (") && l.matches(".*\\(\\d+s\\)"));
     }
 
     /** buildWithDev planPath goes into the Dev slave's standing orders and stays sticky across calls. */

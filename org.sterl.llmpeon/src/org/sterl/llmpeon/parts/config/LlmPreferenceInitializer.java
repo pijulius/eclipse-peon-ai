@@ -17,10 +17,10 @@ import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
-import org.sterl.llmpeon.agent.AiPoAgent;
 import org.sterl.llmpeon.ai.AiProvider;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.parts.PeonConstants;
+import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.shared.StringUtil;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
 
