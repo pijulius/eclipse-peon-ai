@@ -33,14 +33,14 @@ public class ChatMessageUtil {
         if (tokenUsage == null) tokenUsage = response.metadata() != null ? response.metadata().tokenUsage() : null;
         return tokenUsage;
     }
-    private static int estimateTokens(List<ChatMessage> messages) {
+    public static int estimateTokens(List<ChatMessage> messages) {
         int chars = 0;
         for (var msg : messages) chars += charCount(msg);
         return chars / 3;
     }
 
     private static int charCount(ChatMessage msg) {
-        return toString(msg).length();
+        return toString(msg, 900000).length();
     }
 
     public static UserMessage join(UserMessage m1, UserMessage m2) {

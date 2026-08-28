@@ -50,6 +50,8 @@ public class ThreadSafeMemory {
      * https://developers.openai.com/api/docs/guides/function-calling
      */
     public synchronized ThreadSafeMemory add(ChatMessage message) {
+        totalTokenUsed += ChatMessageUtil.estimateTokens(List.of(message));
+
         if (message instanceof UserMessage num 
                 && (!memory.isEmpty() && memory.getLast() instanceof UserMessage lum)) {
             memory.removeLast();
