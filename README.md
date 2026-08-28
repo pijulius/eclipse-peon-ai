@@ -1,3 +1,11 @@
+<div>
+<a href="/marketplace-client-intro?mpc_install=7370342" class="drag" title="Drag to your running Eclipse* workspace. *Requires Eclipse Marketplace Client">
+<img style="width:80px;" typeof="foaf:Image" class="img-responsive" src="https://marketplace.eclipse.org/modules/custom/eclipsefdn/eclipsefdn_marketplace/images/btn-install.svg" alt="Drag to your running Eclipse* workspace. *Requires Eclipse Marketplace Client" />
+</a>
+&nbsp;&nbsp;
+<img typeof="foaf:Image" class="img-responsive" src="https://github.com/sterlp/eclipse-peon-ai/actions/workflows/maven.yml/badge.svg" />
+</div>
+
 # Eclipse Peon AI
 
 A lightweight, context-aware LLM assistant that integrates directly into your Eclipse workbench to support developers in their daily workflow.
