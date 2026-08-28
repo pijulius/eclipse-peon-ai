@@ -1,4 +1,4 @@
-# Offene Enden (2026-08-21)
+# Offene Enden (2026-08-27)
 
 - **Zyklus 2.6.3 (Standing-Orders-Umarbeitung) — Review + Fix-Kampagne abgeschlossen:**
   - Bauspezifikation + Review OK: issues 01 (NPE-Guard in `PeonAiService.get()`), 03+04
@@ -25,6 +25,16 @@
 
 # Geschlossen
 
+- **Zyklus Agent-MD-Vorschläge + Jon-Skill (2026-08-27):** von User selbst finalisiert —
+  `agents-md-proposal/` = 2 Optionen × 3 Dateien (`option-with-jon/` mit Skill-Pointer,
+  Empfehlung / `option-without-jon/` methodenfrei), beide prompt-befreit, nur Projektfakten;
+  README mit Challenge-Ergebnis (Da Thinka) + Deploy-Checkliste. Prompt-Vorschlag
+  `po-delegation.txt` (Autonomie-/Night-Cycle-Schritt) **vom User angewendet**. Jon-Skill
+  (agentskills.io-Format mit role references) vom User **rauskopiert** (→
+  github.com/sterlp/ai-skill-codex) — Repo-Staging (`skills/jon/`, Root `jon-bringup*.md`)
+  vom User gelöscht. Verbliebene Follow-ups (im README): Inc 3 (Phase-Dateien pro Sklave),
+  Module-Guide-Konflikte (runTests vs. mvn), ADR-0027-Duplikat renumerieren,
+  `non-peon-ai-agents-md/` deprecaten. Nichts committed.
 - **Core-Fix-Kampagne (2026-08-16):** `ThreadSafeMemory`-Load-Pfad doppelte Division gestrichen
   (chars/9 → chars/3, konsistent mit `estimateTokens`); `ChatMessageUtil.toString()`-Workaround
   bleibt im Plugin ([ADR-0030](adr/0030-statictext-helper-frozen-chatmessageutil.md)).
