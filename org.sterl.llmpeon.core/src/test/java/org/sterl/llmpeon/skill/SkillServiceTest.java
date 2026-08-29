@@ -2,6 +2,7 @@ package org.sterl.llmpeon.skill;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -15,13 +16,13 @@ import org.sterl.llmpeon.shared.FileUtils;
 
 class SkillServiceTest extends AbstractMemoryFileTest {
 
-    private static final Path SKILLS_DIR = Path.of("../skills");
-
     static final SkillService subject = new SkillService();
 
     @BeforeAll
     static void beforeAll() throws Exception {
-        subject.refresh(SKILLS_DIR);
+        var skillsDir = Files.createDirectory(tmp.resolve("skills"));
+        writeSkill(skillsDir, "eclipse-ifile-paths", "Eclipse IFile paths", "use toPortableString");
+        subject.refresh(skillsDir);
     }
 
     @BeforeEach
@@ -85,7 +86,7 @@ class SkillServiceTest extends AbstractMemoryFileTest {
 
     @Test
     void testRefreshLoadsSkills() throws Exception {
-        // GIVEN skills directory with at least one skill
+        // GIVEN skills directory with one skill written by this test
 
         // WHEN
         var skills = subject.getSkills();
@@ -169,5 +170,15 @@ class SkillServiceTest extends AbstractMemoryFileTest {
         // THEN
         assertThat(subject.getSkills()).isEmpty();
         assertThat(subject.getAllLoadedSkills()).hasSize(loadedCount);
+    }
+
+    private static void writeSkill(Path dir, String name, String description, String body) throws IOException {
+        Files.writeString(dir.resolve(name + ".md"), """
+                ---
+                name: %s
+                description: %s
+                ---
+                %s
+                """.formatted(name, description, body));
     }
 }

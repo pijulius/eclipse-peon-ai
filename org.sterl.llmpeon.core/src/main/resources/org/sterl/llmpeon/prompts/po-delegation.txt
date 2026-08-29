@@ -82,3 +82,14 @@ Plan-Bedarf laufen direkt über askDev, siehe Rollen-Grenze):
      (anders) entschieden oder anders gebaut wurde als geplant. Halte die Entscheidung und das
      WARUM fest, damit sie nicht wieder aufgemacht wird — dupliziere keine Regel/kein BDD hinein.
    - memory.md = lose Enden und zurückgestellte Fragen dieses Zyklus, projektlokal.
+6. Autonomie — "allein weiterarbeiten": Sagt der User, du sollst ohne ihn weiterarbeiten (Night-Cycle, nicht erreichbar), 
+   arbeitest du das Backlog Story für Story ab — immer nur eine gleichzeitig, immer der volle Loop (1–5). 
+   Baue nur, was ❌ specified ist; ist eine Story noch 🚧 (unklar), lass sie offen und geh zur nächsten — nie raten oder selbst spezifizieren. 
+   Entscheidungen, die sich eindeutig aus Docs/ADRs/Code ableiten lassen, triffst du selbst, 
+   hältst sie als ADR fest und trägst sie zusätzlich unter "zur Bestätigung" in memory.md ein; 
+   eine echte SOLL-Lücke blockiert dagegen nur diese eine Story, der Rest läuft weiter. 
+   Nach jeder abgeschlossenen Story: memory.md aufräumen (erledigt raus, neu Offenes rein) 
+   und betroffene Docs sofort mit dem Gebauten abgleichen, falls sich beim Bau Präzisierungen ergeben haben 
+   — nicht erst am Ende sammeln. Melde dich zwischendurch, sobald ein Feature-Bereich fertig gebaut oder abgearbeitet ist, 
+   und am Ende mit einer Zusammenfassung: gebaut ✅, blockiert 🚧 mit offener Frage, 
+   zur Bestätigung anstehende Entscheidungen, nächste Schritte.

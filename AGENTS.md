@@ -1,88 +1,77 @@
-# AGENTS.md — Ground Rules
+# AGENTS.md — LLM Peon
 
-How we collaborate. Start at the project map **[docs/index.md](docs/index.md)** (story registry);
-each feature's business requirements + BDD live in its own `docs/` page, technical decisions in
-[docs/adr/index.md](docs/adr/index.md).
+LLM Peon is an Eclipse RCP plugin that runs AI agents (Peon-PO / Peon-Plan / Peon-Dev + custom
+agents) inside Eclipse: chat UI, streaming, tool loop, sub-agent orchestration.
 
-## Common Rules
+**Working method:** docs-first PO cycle — the method itself lives in the **Jon skill**
+(`https://github.com/sterlp/ai-skill-codex/tree/main/skills/jon`).
 
-- **Be concise.** Short, direct chat answers — no filler, no restating the known. The docs still
-  capture every decision.
-- **One question at a time, with a recommended answer.**
-- **Clarify → plan → code.** Don't assume — if it isn't in the docs, ask or request an
-  example/BDD/use-case. The feature must be clear and fit the existing docs.
+## Repo layout
 
-### Response style
-- No preamble/postamble — skip "I will…", "Here is…", "Based on…", "Done."
-- Answer directly, 1–4 lines unless detail is asked for. Don't repeat what was said; cut words that
-  add no meaning.
-- Can't help? Offer alternatives in 1–2 sentences — don't moralize.
-- `->` denotes a dependency.
-
-### Phase files — read the one for your phase
-This `AGENTS.md` is the **always-on base** (shared by every phase). Phase-specific rules live in
-sibling files with **no duplication** between them. The Peon plugin auto-loads the right one per mode;
-**any other tool must open it manually:**
-- **Planning → `AGENTS-PLAN.md`** — the WHAT: story + ADRs, how to capture the plan as docs.
-- **Implementing → `AGENTS-DEV.md`** — the HOW: code, testing, logging, build, dependencies,
-  thread-safety, project specifics.
-- **After each iteration → `AGENTS-SESSION-END.md`** — the retro + how these guidance files are
-  structured and maintained.
-  
-### Docs-first — the docs are the SOLL/WIE
-- **Plan in the docs together; joint planning IS the approval.** Rules, BDD use-cases
-  (GIVEN/WHEN/THEN) and ADRs are captured first as the target. While planning decide: new module?
-  Check for conflicts with existing rules, fit with current docs.
-- **At the end, reconcile the docs with what was built — and compress** (only what helps, never
-  echo the code).
-- **Capture every rule/decision in the docs** (`docs/adr/` for technical ones), never only in chat.
-  `docs/index.md` = map/vision + story registry;
-  `docs/<feature>.md` = business requirements + BDD;
-  `docs/adr/` = decisions + `index.md` registry.
-- **Broad sweep → find and read every `index.md` at once** (root + per-module) to get the full map
-  before diving into a single doc.
-- **Three artefact layers, three jobs:** `docs/*.md` = the business truth (rules + BDD);
-  `docs/adr/*.md` = **the agent's memory**, the bridge between doc and code; code = technical
-  language. An ADR closes gaps the docs don't explain and never repeats a rule or a BDD.
-
-### Module structure
-Maven multi-module, each module prefixed with the project key (e.g. `<project>-api`):
-- **A large feature = its own module.** In large projects the backend holds only config/wiring;
-  every feature is its own module.
-- **One feature = one name** across its `docs/` page and the module's package/folder.
-- `…-api` — code shared between modules. `…-backend` — config + wiring. `…-shared` —
-  dependency-free shared code (a backend-only shared stays backend-specific).
-- **A module is doc-self-contained.** Every Maven module owns `docs/` (+ `docs/adr/`), each with an
-  `index.md` map — created empty up-front, filled as you touch. `index.md` is the reserved registry
-  filename of its folder (portable — Azure DevOps wiki / VitePress render it as the folder landing
-  page). When the repo has more than one `docs/` folder, a repo-root `index.md` **links** to each
-  module's `docs/index.md` and each module **links back**; the root keeps only **cross-cutting** docs
-  + ADRs, module-specific ADRs live in the module's `docs/adr/` (no re-summarising the module in root
-  → no drift). A feature spanning modules: doc + ADR live with the **owning** module, glue only links.
-  Exception: `*-test`/support modules get no skeleton.
-
-# Repo layout — Eclipse plugin RCP
-
-This is the real module layout — it **overrides** the generic Common `Module structure`: no
-`-api/-backend/-shared` split and no per-module docs skeleton — the story `docs/` (with `docs/adr/`,
-each carrying its `index.md`) lives at the root. A feature is a **package with the same name across
-the three fixed OSGi bundles**, each bundle with its own `AGENTS.md`:
-
-- `org.sterl.llmpeon.core` — non-Eclipse code and tests
-- `org.sterl.llmpeon` — Eclipse plugin code
-- `org.sterl.llmpeon.test` — Eclipse plugin tests
-
-changes in core need shell `mvn clean verify` to be picked up in llmpeon or llmpeon.test
+| Module | What |
+|---|---|
+| `org.sterl.llmpeon.core` (artifactId `llmpeon-core`) | Non-Eclipse business logic + tests — plain Maven, JUnit 5, AssertJ, Lombok. Agent prompts in `src/main/resources/org/sterl/llmpeon/prompts/`. |
+| `org.sterl.llmpeon` | Eclipse plugin: SWT/JFace UI + wiring (OSGi). |
+| `org.sterl.llmpeon.test` | OSGi plugin tests — JUnit 4, no external assertion libs. |
+| `releng/` | Tycho feature, target platform, update site. |
 
 Module guides (read when working in one):
-- `/org.sterl.llmpeon/AGENTS.md` — Plugin UI & Logic (error handling patterns, Job usage).
-- `/org.sterl.llmpeon.core/AGENTS.md` — Core logic (Lombok conventions).
-- `/org.sterl.llmpeon.test/AGENTS.md` — Test execution specifics.
+- `org.sterl.llmpeon.core/AGENTS.md` — core conventions
+- `org.sterl.llmpeon/AGENTS.md` — plugin UI & logic patterns
+
+## Build & test
+
+- Full build: `mvn clean verify` at the repo root (`llmpeon-parent`) — an Eclipse refresh +
+  clean build afterwards is needed.
+- **Core changes need `mvn clean verify` in `org.sterl.llmpeon.core`** so the plugin/test
+  bundles pick up the new core — Tycho resolves core from the target platform, not the reactor.
+- Core tests: `mvn -pl org.sterl.llmpeon.core test` (JUnit 5). `@Tag("integration")` tests are
+  excluded by default — run with `-Pintegration`.
+- Plugin tests: `org.sterl.llmpeon.test` via the Eclipse test runner (OSGi, JUnit 4).
+  - Before EVERY test run call `eclipseBuildProject` (all changed projects) — stale bundle
+    classes in `bin/` cause `ClassNotFoundException` / unresolved-compilation failures, and
+    stale Surefire reports under `target/` mislead result reading.
+  - A new test class needs manual workspace approval by the user and may time out if he is not
+    watching — prefer the already approved suite.
+- Compile-checking the plugin against local core changes: `mvn -o -pl org.sterl.llmpeon -am
+  package` — without `-am` Tycho resolves core from the target platform (a stale copy) and
+  reports phantom "cannot be resolved" errors for brand-new core symbols.
+
+## Dependencies
+
+- External JARs land in `lib/` via `maven-dependency-plugin`; `MANIFEST.MF` `Bundle-ClassPath`,
+  `build.properties` `bin.includes` and `.classpath` must list the **same** JARs.
+- Whitelist only the needed groupIds via `includeGroupIds`. Platform-provided JARs (jakarta,
+  osgi, jna, asm, jetty, felix, …) must **not** be in `lib/` — they come from the target
+  platform.
+
+## Code invariants
+
+- **Thread safety:** all code must be thread-safe (`volatile` / `Atomic*` / `ReentrantLock`) —
+  SWT jobs, streaming callbacks and the tool loop run concurrently. No single-threaded
+  assumptions.
+- Elegant, expressive modern Java (records, pattern matching, switch expressions, Lombok).
+- **Log OR throw, never both** (except facades where the exception leaves the context).
 
 ## Docs
 
-Two doc trees, kept separate — start at `docs/index.md`:
-- `docs/` — application design & dev spec (the HOW / system reference), ADRs in `docs/adr/`
-  (`docs/adr/index.md` registry). This is the tree Jon owns.
-- `homepage/` — the published user documentation ("how to use the plugin") for end users; build
-  mechanics live in `AGENTS-DEV.md` ("User docs").
+Three trees, kept separate:
+- `docs/` — the **SOLL**: feature stories (goal, business rules + BDD) and technical design
+  docs in `docs/<feature>.md`, story registry `docs/index.md`, technical decisions in
+  `docs/adr/` (`docs/adr/index.md` registry), cycle notes in `docs/memory.md`. An ADR is a
+  technical decision that doesn't follow from a rule/BDD: `docs/adr/NNNN-<slug>.md`
+  (Status · Context · Decision · Consequences) — it cross-links to the story, never repeats
+  a rule or BDD. In Peon the docs are owned by the PO + the user — **no other agent writes to
+  `docs/`**.
+- `homepage/` — published end-user documentation (VitePress); mechanics in `AGENTS-DEV.md`.
+- `skills/` — agent skills (YAML frontmatter `description` + markdown body).
+
+Start at `docs/index.md` for the full map before touching a feature.
+
+## Phase files
+
+- `AGENTS-PLAN.md` (planning), `AGENTS-DEV.md` (implementing) — project-specific additions on
+  top of the Jon skill's method. The Peon plugin auto-loads `AGENTS-<agent>.md` for the
+  **active** Peon-PO/Plan/Dev (key = name after "Peon-", uppercased); Jon's slave agents
+  currently receive this base file only. Any other tool opens them manually and follows the
+  Jon skill.
