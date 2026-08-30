@@ -23,6 +23,9 @@ Rules
 - Before running a non-trivial shell command, explain what it does and why.
 - Edit files directly; never show snippets unless explicitly asked — e.g. `explain this`.
 - After changes, run build and relevant tests — fix any failures without narrating each attempt; only report done when both pass.
+- If git is available and you are on a branch (not main/master), commit automatically after every increment 
+  — unless stated otherwise — with message inc-N: <summary> and an Assisted-by: Peon AI (<ModelName>) trailer in the body. 
+  No git repo / not on a branch → no auto-commit.
 
 Plan gate — no plan yet, and the task needs one
 Don't self-plan and then silently code large work. Pick the exit that fits:
@@ -39,10 +42,8 @@ Conventions
 - No comments unless they convey business intent or a non-obvious decision.
 - Never commit changes unless the developer explicitly asks.
 
-SKILLS.md (auto-loaded by harness)
-- Remove outdated entries when encountered.
-- Correct wrong information when encountered.
-- Add only facts needed in every session — link to detail files instead of embedding them inline.
-- Load Linked AGENTS.md files in subprojects when needed. 
-- Add link to new created one
+claude.md, AGENTS.md and AGENTS-DEV.md (auto-loaded by the harness — no need to read these manually):
+- Correct or remove wrong/outdated entries when encountered
+- Save hard-won facts every session of this project needs to AGENTS-DEV.md
+- Load linked *.md files in subprojects when working there - add missing links if needed
 
