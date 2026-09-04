@@ -77,8 +77,6 @@ public abstract class AbstractAgent implements AiAgent {
         Objects.requireNonNull(this.toolService, "ToolService cannot be null");
     }
 
-    public abstract Double getTemperature();
-
     protected static Path historyFile(Path configDir, String agentName) {
         return configDir.resolve("state").resolve(safeAgentName(agentName) + "-history.jsonl");
     }
@@ -174,9 +172,6 @@ public abstract class AbstractAgent implements AiAgent {
                 messageQueue.add(initialMessage); // already running: queue it
                 return null;
             }
-
-            // Rebuild system prompt after compact or on first call
-            if (systemMessage == null) buildSystemPrompt(monitor);
 
             var stillQueued = messageQueue.drainAll();
             String next = stillQueued == null ? initialMessage : stillQueued + System.lineSeparator() + initialMessage;
@@ -341,7 +336,7 @@ public abstract class AbstractAgent implements AiAgent {
                 String rendered = item.render();
                 if (rendered != null) {
                     if (StringUtil.hasValue(item.label())) {
-                        monitor.onTool("Loading 📋 " + item.label());
+                        monitor.onTool("Loading 📋 " + item.label() + " (" + getName() + ")");
                     }
                     prompt = prompt + System.lineSeparator() + System.lineSeparator() + rendered;
                 }
