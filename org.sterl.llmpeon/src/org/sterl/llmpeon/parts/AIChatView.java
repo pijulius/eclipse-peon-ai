@@ -364,10 +364,11 @@ public class AIChatView implements EclipseAiMonitor {
         LOG.info("Set new config " + config);
         // ensure we set the voice config as we break later ...
         chatInput.setVoiceInputVisible(VoicePreferenceInitializer.buildWithDefaults().enabled());
+        chatHistory.setShowRealtimeAiResponse(config.isShowRealtimeAiResponse());
+
         if (lastAppliedConfig != null && lastAppliedConfig.equals(config)) return;
         lastAppliedConfig = config;
         aiService.updateConfig(config);
-        chatHistory.setShowRealtimeAiResponse(config.isShowRealtimeAiResponse());
 
         actionsBar.setAgents(aiService.getAgents());
         actionsBar.updateModeUI(aiService.getActiveAgent());
@@ -462,7 +463,7 @@ public class AIChatView implements EclipseAiMonitor {
 
     private void doCompressContext() {
         var active = aiService.getActiveAgent();
-        if (active.getMemory().size() == 0) return;
+        if (active.getMemory().size() < 3) return;
         lockWhileWorking(true);
         chatHistory.clear();
         Job.create("Compressing context", monitor -> {
@@ -471,7 +472,7 @@ public class AIChatView implements EclipseAiMonitor {
             Exception ex = null;
             ChatResponse cr = null;
             try {
-                cr = active.compressContext(this);
+                cr = active.compact(this);
             } catch (Exception e) {
                 ex = handleChatException(e);
             } finally {
