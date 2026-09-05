@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.sterl.llmpeon.ai.model.AiModel;
+import org.sterl.llmpeon.provider.LlmProviders;
+import org.sterl.llmpeon.shared.StringUtil;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -31,7 +33,7 @@ import lombok.ToString;
 @AllArgsConstructor
 @Getter
 @EqualsAndHashCode
-@ToString(exclude = {"apiKey", "headerParams"})
+@ToString(exclude = {"apiKey", "headerParams", "extraBody"})
 public class LlmConfig {
     
     public final static String SKILL_DIRECTORY      = "skills";
@@ -43,12 +45,13 @@ public class LlmConfig {
     private final AiProvider providerType = AiProvider.OLLAMA;
     @Default
     private final String model = null;
+    /**
+     * Per-agent model configs keyed by agent id ({@code dev}/{@code po}/{@code plan}/{@code search}/{@code compact}).
+     * Immutable; missing entries resolve to {@link AgentModelConfig#empty()}. The dev model is the base
+     * {@link #model} (no separate dev model key).
+     */
     @Default
-    private final String planModel = null;
-    @Default
-    private final String compactModel = null;
-    @Default
-    private final String searchModel = null;
+    private final Map<String, AgentModelConfig> modelConfigs = Map.of();
     @NonNull
     @Default
     private final Duration timeout = Duration.ofMinutes(3);
@@ -56,10 +59,6 @@ public class LlmConfig {
     private final String url = null;
     @Default
     private final int autoCompactAfter = 80000;
-    @Default
-    private final double planTemperature = 1.0;
-    @Default
-    private final double devTemperature = 0.6;
     /**
      * Max output tokens per response. 0 = use the provider/library default.
      * Anthropic's langchain4j default is only 1024, which truncates large
@@ -67,27 +66,25 @@ public class LlmConfig {
      */
     @Default
     private final int maxTokens = 0;
-    /** Dev/default model capability. Also drives build-time thinking config where providers require it. */
+    /**
+     * Base/dev model capability. Drives build-time thinking for Gemini/Mistral and the returnThinking
+     * context only — the per-agent think value itself now lives in {@link #modelConfigs}.
+     */
     @Default
     private final boolean thinkSupported = false;
-    /** Dev on-value. Empty -&gt; auto (heuristic). Setting on or off puts the agent in manual mode. */
-    @Default
-    private final String thinkOnString = null;
-    /** Dev off-value. Empty means provider default, except Ollama maps resolved off to {@code think:false}. */
-    @Default
-    private final String thinkOffString = null;
-    /** Plan model capability. */
-    @Default
-    private final boolean planThinkSupported = false;
-    @Default
-    private final String planThinkOnString = null;
-    @Default
-    private final String planThinkOffString = null;
     /** Global "send thinking back" (build-time). */
     @Default
     private final boolean sendThinkingEnabled = true;
     @Default
     private final String apiKey = null;
+    /**
+     * Raw extra JSON body (advanced configuration). Transport for the <b>build-time</b> body:
+     * the effective build config carries it into the provider's {@code buildModel}. The base
+     * config never sets it (only the effective build-config copy does), so base identity
+     * comparison stays unaffected.
+     */
+    @Default
+    private final String extraBody = null;
     @Default
     private final Path configDir = Path.of(System.getProperty("user.home"), ".peon");
 
@@ -149,44 +146,93 @@ public class LlmConfig {
         return new ConfiguredChatModel(this);
     }
 
-    private AgentConfig.AgentConfigBuilder baseAgentConfig() {
+    /**
+     * Base provider/url/key with the record's own url/key/extraBody overriding the base. A blank
+     * record field inherits the base value (resolved again by {@link EffectiveConnection}).
+     */
+    private AgentConfig.AgentConfigBuilder agentBuilder(AgentModelConfig rec) {
         return AgentConfig.builder()
                 .provider(providerType)
-                .url(url)
-                .apiKey(apiKey);
+                .url(StringUtil.hasValue(rec.url()) ? rec.url() : url)
+                .apiKey(StringUtil.hasValue(rec.apiKey()) ? rec.apiKey() : apiKey)
+                .extraBody(StringUtil.stripToNull(rec.extraBody()))
+                .temperature(AgentTemperature.parse(rec.temperature()));
     }
 
-    /** Dev agent (default model) — uses the dev think slot ({@code DEV == GLOBAL == DEFAULT}). */
+    /** The per-agent config for the given agent id; missing entries resolve to {@link AgentModelConfig#empty()}. */
+    public AgentModelConfig modelConfigFor(String agentId) {
+        return modelConfigs.getOrDefault(agentId, AgentModelConfig.empty());
+    }
+
+    /** A copy with the given agent's model config replaced (null removes the entry). */
+    public LlmConfig withModelConfig(String agentId, AgentModelConfig config) {
+        var updated = new LinkedHashMap<>(modelConfigs);
+        if (config == null) {
+            updated.remove(agentId);
+        } else {
+            updated.put(agentId, config);
+        }
+        return toBuilder().modelConfigs(Map.copyOf(updated)).build();
+    }
+
+    /**
+     * The effective connection for the given per-agent record (url/key/body as currently set,
+     * provider from the base) — used to fetch the model list for exactly that configuration.
+     */
+    public EffectiveConnection effectiveConnectionFor(AgentModelConfig record) {
+        return EffectiveConnection.of(this, agentBuilder(record).build());
+    }
+
+    /** Dev agent — always the base {@link #model}; think/url/key/body from the dev record (verbatim). */
     public AgentConfig devAgentConfig() {
-        return baseAgentConfig().model(model)
-                .think(ThinkResolver.effectiveThink(thinkSupported, thinkOnString, thinkOffString))
-                .temperature(devTemperature).build();
+        var dev = modelConfigFor(AgentModelConfig.DEV);
+        return agentBuilder(dev).model(model)
+                .id(AgentModelConfig.DEV)
+                .think(dev.think()).build();
     }
 
-    /** Plan agent — its own think slot; {@link #planModel} (null = provider default) and plan temperature. */
+    /** PO agent — model falls back to base; remaining fields come from its own record. */
+    public AgentConfig poAgentConfig() {
+        var po = modelConfigFor(AgentModelConfig.PO);
+        return agentBuilder(po).model(StringUtil.hasValue(po.model()) ? po.model() : model)
+                .id(AgentModelConfig.PO)
+                .think(po.think()).build();
+    }
+
+    /** Plan agent — configuration from its own record (model null = provider default). */
     public AgentConfig planAgentConfig() {
-        return baseAgentConfig().model(planModel)
-                .think(ThinkResolver.effectiveThink(planThinkSupported, planThinkOnString, planThinkOffString))
-                .temperature(planTemperature).build();
+        var plan = modelConfigFor(AgentModelConfig.PLAN);
+        return agentBuilder(plan).model(plan.model())
+                .id(AgentModelConfig.PLAN)
+                .think(plan.think()).build();
     }
 
-    /** Compactor — never thinks (nothing sent). Mirrors {@link org.sterl.llmpeon.agent.AiCompressorAgent}'s temperature. */
+    /** Compactor — configuration from its own record. */
     public AgentConfig compactAgentConfig() {
-        return baseAgentConfig().model(compactModel).think(null)
-                .temperature(devTemperature < 1.0 ? 0.2 : null).build();
+        var compact = modelConfigFor(AgentModelConfig.COMPACT);
+        return agentBuilder(compact).model(compact.model())
+                .id(AgentModelConfig.COMPACT)
+                .think(compact.think()).build();
     }
 
-    /** Search sub-agent — never thinks (nothing sent). Mirrors {@link org.sterl.llmpeon.tool.tools.SearchAgentTool}'s temperature. */
+    /** Search sub-agent — configuration from its own record. */
     public AgentConfig searchAgentConfig() {
-        return baseAgentConfig().model(searchModel).think(null)
-                .temperature(devTemperature < 1.0 ? 0.3 : null).build();
+        var search = modelConfigFor(AgentModelConfig.SEARCH);
+        return agentBuilder(search).model(search.model())
+                .id(AgentModelConfig.SEARCH)
+                .think(search.think()).build();
     }
 
-    /** Custom agent — think from its own {@code AGENT.md} frontmatter (no inheritance), provider/url/key from here. */
-    public AgentConfig customAgentConfig(String agentModel, boolean supported, String on, String off, Double temperature) {
-        return baseAgentConfig().model(agentModel)
-                .think(ThinkResolver.effectiveThink(supported, on, off))
-                .temperature(temperature).build();
+    /**
+     * Custom agent — model/url/key/extraBody from the agent's own {@code AGENT.md} frontmatter
+     * record (blank fields inherit the base, resolved by {@link EffectiveConnection}) and think from
+     * its own frontmatter triple (no inheritance). Same resolution path as the five core agents;
+     * {@code agentId} is the agent's stable name (per-request metadata, e.g. default cache key).
+     */
+    public AgentConfig customAgentConfig(AgentModelConfig rec, String agentId, boolean supported, String on, String off) {
+        return agentBuilder(rec).model(rec.model())
+                .id(agentId)
+                .think(ThinkResolver.effectiveThink(supported, on, off)).build();
     }
 
     public LlmConfig withModel(String model) {
@@ -223,10 +269,10 @@ public class LlmConfig {
     }
 
     public List<AiModel> listAiModels() {
-        return getProviderType().listAiModels(this);
+        return LlmProviders.of(getProviderType()).listAiModels(this);
     }
     
     public List<String> listModels() {
-        return getProviderType().listModels(this);
+        return LlmProviders.of(getProviderType()).listModels(this);
     }
 }

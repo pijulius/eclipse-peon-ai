@@ -3,11 +3,13 @@ package org.sterl.llmpeon;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
+import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.AiProvider;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
@@ -47,7 +49,8 @@ public class AiServicePerAgentThinkTest {
                 .providerType(AiProvider.OPEN_AI_OFFICIAL)
                 .model("kimi-k2")
                 .timeout(Duration.ofSeconds(5))
-                .planModel("gpt-5.5").planThinkSupported(true).planThinkOnString("high")
+                .modelConfigs(Map.of(AgentModelConfig.PLAN,
+                        new AgentModelConfig(null, null, "gpt-5.5", "high", null, null)))
                 .build();
 
         new AiDevAgent(model(config), toolService).call("test", null);
@@ -62,7 +65,8 @@ public class AiServicePerAgentThinkTest {
         var config = LlmConfig.builder()
                 .providerType(AiProvider.OPEN_AI_OFFICIAL)
                 .model("kimi-k2")
-                .planModel("gpt-5.5").planThinkSupported(true).planThinkOnString("high")
+                .modelConfigs(Map.of(AgentModelConfig.PLAN,
+                        new AgentModelConfig(null, null, "gpt-5.5", "high", null, null)))
                 .build();
 
         new AiPlanAgent(model(config), toolService).call("test", null);
@@ -73,12 +77,13 @@ public class AiServicePerAgentThinkTest {
     }
 
     @Test
-    void devManualThinkSupportedOnStringApplies() {
+    void devManualThinkValueApplies() {
         var config = LlmConfig.builder()
                 .providerType(AiProvider.OPEN_AI_OFFICIAL)
                 .timeout(Duration.ofSeconds(5))
                 .model("gpt-5.5")
-                .thinkSupported(true).thinkOnString("medium")
+                .modelConfigs(Map.of(AgentModelConfig.DEV,
+                        new AgentModelConfig(null, null, null, "medium", null, null)))
                 .build();
 
         new AiDevAgent(model(config), toolService).call("test", null);
@@ -91,10 +96,10 @@ public class AiServicePerAgentThinkTest {
     void customAgent_manualOnString_disablesHeuristic() {
         var cfg = LlmConfig.builder().providerType(AiProvider.OPEN_AI).model("deepseek-chat").build();
         // supported + on="minimal" -> verbatim, no heuristic
-        assertThat(cfg.customAgentConfig("deepseek-chat", true, "minimal", "", null).getThink()).isEqualTo("minimal");
+        assertThat(cfg.customAgentConfig(AgentModelConfig.empty().withModel("deepseek-chat"), "custom", true, "minimal", "").getThink()).isEqualTo("minimal");
         // both empty + supported -> auto marker
-        assertThat(cfg.customAgentConfig("deepseek-chat", true, "", "", null).getThink()).isEqualTo("true");
+        assertThat(cfg.customAgentConfig(AgentModelConfig.empty().withModel("deepseek-chat"), "custom", true, "", "").getThink()).isEqualTo("true");
         // unsupported + off="false" -> verbatim off
-        assertThat(cfg.customAgentConfig("deepseek-chat", false, "", "false", null).getThink()).isEqualTo("false");
+        assertThat(cfg.customAgentConfig(AgentModelConfig.empty().withModel("deepseek-chat"), "custom", false, "", "false").getThink()).isEqualTo("false");
     }
 }

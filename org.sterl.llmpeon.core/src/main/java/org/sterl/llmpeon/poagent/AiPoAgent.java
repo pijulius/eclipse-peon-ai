@@ -3,12 +3,15 @@ package org.sterl.llmpeon.poagent;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import org.sterl.llmpeon.agent.AbstractAgent;
 import org.sterl.llmpeon.agent.AiPlanAgent;
 import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.AgentConfig;
+import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
+import org.sterl.llmpeon.ai.ThinkResolver;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.memory.FileAgentHistoryStore;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
@@ -21,7 +24,7 @@ import org.sterl.llmpeon.tool.WriteValidator;
 /**
  * Peon-PO ("Jon") — a docs-owning agent. Reads freely, writes only under docs/ (via
  * {@link WriteValidator#DOCS}). Unlike {@link AiPlanAgent} he keeps the edit tools (the validator, not
- * a tool filter, scopes him). Reuses the plan {@link AgentConfig} for provider/think/temperature.
+ * a tool filter, scopes him). Uses his own {@link AgentConfig} for provider/model/think.
  */
 public class AiPoAgent extends AbstractAgent {
 
@@ -90,43 +93,28 @@ public class AiPoAgent extends AbstractAgent {
     }
 
     @Override
-    public Double getTemperature() {
-        return configuredModel.getConfig().getPlanTemperature();
-    }
-
-    @Override
     public AgentConfig getConfig() {
-        var cfg = configuredModel.getConfig();
-        var plan = cfg.planAgentConfig();
-        // Jon uses the plan model slot; when it is unset he falls back to the dev/default model.
-        return StringUtil.hasValue(plan.getModel())
-                ? plan
-                : plan.toBuilder().model(cfg.getModel()).build();
+        return configuredModel.getConfig().poAgentConfig();
     }
 
     @Override
     public boolean isThinkSupported() {
-        return configuredModel.getConfig().isPlanThinkSupported();
+        return !ThinkResolver.isOff(configuredModel.getConfig().modelConfigFor(AgentModelConfig.PO).think());
     }
 
     @Override
     public String getAgentModelName() {
         var cfg = configuredModel.getConfig();
-        return StringUtil.hasValue(cfg.getPlanModel()) ? cfg.getPlanModel() : cfg.getModel();
+        var po = cfg.modelConfigFor(AgentModelConfig.PO).model();
+        return StringUtil.hasValue(po) ? po : cfg.getModel();
     }
 
     @Override
     public boolean setAgentModelName(String modelName) {
         var cfg = configuredModel.getConfig();
-        if (modelName == null) {
-            if (cfg.getPlanModel() == null) return false;
-            this.configuredModel.updateConfig(cfg.toBuilder().planModel(null).build());
-            return true;
-        }
-        if (!modelName.equals(cfg.getPlanModel())) {
-            this.configuredModel.updateConfig(cfg.toBuilder().planModel(modelName).build());
-            return true;
-        }
-        return false;
+        var po = cfg.modelConfigFor(AgentModelConfig.PO);
+        if (Objects.equals(modelName, po.model())) return false;
+        this.configuredModel.updateConfig(cfg.withModelConfig(AgentModelConfig.PO, po.withModel(modelName)));
+        return true;
     }
 }

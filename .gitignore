@@ -47,3 +47,11 @@ sources/
 org.sterl.llmpeon.core/.classpath
 /copilot_src/
 /graphify-out/
+
+
+### Fixture: test_project re-inkludieren (Muss nach allen Ignorier-Regeln stehen) ###
+!/test_project/.project
+!/test_project/.classpath
+!/test_project/src/**
+!/test_project/.settings/
+!/test_project/.settings/*.prefs

@@ -300,7 +300,6 @@ class AbstractAgentTest {
         var agent = new AbstractAgent(model, new ToolService(), testMemory, 1.0) {
             @Override public String getName() { return "test"; }
             @Override public String getSystemPrompt() { return "test"; }
-            @Override public Double getTemperature() { return 0.7; }
         };
         
         // WHEN
@@ -323,7 +322,6 @@ class AbstractAgentTest {
         var agent = new AbstractAgent(model, new ToolService(), testMemory, 1.0) {
             @Override public String getName() { return "test"; }
             @Override public String getSystemPrompt() { return "test"; }
-            @Override public Double getTemperature() { return 0.7; }
         };
         
         // WHEN & THEN
@@ -388,6 +386,31 @@ class AbstractAgentTest {
         // 3 calls total: first call + compressor + second call
         assertThat(callCount.get()).isEqualTo(3);
     }
+
+    @Test
+    void buildsSystemPromptOnceWhenAutoCompacting() {
+        var config = LlmConfig.builder().model("mock").autoCompactAfter(100).build();
+        var mockModel = streamMock.buildMock(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("OK")).build());
+        var memory = new ThreadSafeMemory() {
+            @Override public int getTotalTokenUsed() { return 101; }
+        };
+        var agent = new AbstractAgent(
+                new ConfiguredChatModel(config, mockModel), new ToolService(), memory, 1.0) {
+            @Override public String getName() { return "test"; }
+            @Override public String getSystemPrompt() { return "test"; }
+        };
+        var renderCount = new AtomicInteger();
+        agent.setStaticContext(List.of((ContextItem) () -> {
+            renderCount.incrementAndGet();
+            return "persistent context";
+        }));
+
+        agent.call("test", monitor -> {});
+
+        assertThat(renderCount.get()).isOne();
+    }
+
 
     /** restoreTurnContext skips items already in memory (contains-check). */
     @Test
@@ -540,7 +563,7 @@ class AbstractAgentTest {
         agent.call("test", monitor);
 
         // THEN — onTool called for labeled item only
-        assertThat(toolMessages).contains("Loading 📋 docs/memory.md");
+        assertThat(toolMessages).contains("Loading 📋 docs/memory.md (Peon-Dev)");
         assertThat(toolMessages).noneMatch(m -> m.contains("unlabeled"));
     }
 

@@ -1,9 +1,12 @@
 package org.sterl.llmpeon.agent;
 
 import java.nio.file.Path;
+import java.util.Objects;
 import java.util.function.Predicate;
 
+import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
+import org.sterl.llmpeon.ai.ThinkResolver;
 import org.sterl.llmpeon.memory.FileAgentHistoryStore;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.prompt.PromptLoader;
@@ -35,23 +38,18 @@ public class AiPlanAgent extends AbstractAgent {
     }
 
     @Override
-    public Double getTemperature() {
-        return configuredModel.getConfig().getPlanTemperature();
-    }
-
-    @Override
     public org.sterl.llmpeon.ai.AgentConfig getConfig() {
         return configuredModel.getConfig().planAgentConfig();
     }
 
     @Override
     public boolean isThinkSupported() {
-        return configuredModel.getConfig().isPlanThinkSupported();
+        return !ThinkResolver.isOff(configuredModel.getConfig().modelConfigFor(AgentModelConfig.PLAN).think());
     }
 
     @Override
     public String getAgentModelName() {
-        return configuredModel.getConfig().getPlanModel();
+        return configuredModel.getConfig().modelConfigFor(AgentModelConfig.PLAN).model();
     }
 
     @Override
@@ -62,16 +60,10 @@ public class AiPlanAgent extends AbstractAgent {
     @Override
     public boolean setAgentModelName(String modelName) {
         var cfg = configuredModel.getConfig();
-        if (modelName == null) {
-            if (cfg.getPlanModel() == null) return false;
-            this.configuredModel.updateConfig(cfg.toBuilder().planModel(null).build());
-            return true;
-        }
-        if (!modelName.equals(cfg.getPlanModel())) {
-            this.configuredModel.updateConfig(cfg.toBuilder().planModel(modelName).build());
-            return true;
-        }
-        return false;
+        var plan = cfg.modelConfigFor(AgentModelConfig.PLAN);
+        if (Objects.equals(modelName, plan.model())) return false;
+        this.configuredModel.updateConfig(cfg.withModelConfig(AgentModelConfig.PLAN, plan.withModel(modelName)));
+        return true;
     }
 
     @Override
