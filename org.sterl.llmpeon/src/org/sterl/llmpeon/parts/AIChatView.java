@@ -158,7 +158,6 @@ public class AIChatView implements EclipseAiMonitor {
             this::doCompressContext
         );
         actionsBar.setLayoutData(new RowData());
-        actionsBar.setModel(aiService.getActiveAgent().getAgentModelName());
 
         statusLine = new StatusLineWidget(footerBlock, SWT.PUSH,
             this::onPinChange,
