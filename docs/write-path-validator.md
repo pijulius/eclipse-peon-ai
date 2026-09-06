@@ -1,5 +1,11 @@
 # Write-Path Validator
 
+**2026-09-04 (✅ done):** Pfad-Normalisierung vor Glob-Match (Bug-Hunt #9) — Traversal-Bypass
+geschlossen, BDD R1 um Traversal-Fall erweitert.
+**2026-09-04 (follow-up #9):** Normalisierung = `\`→`/` **und** `.`/`..`-Auflösung — unbedingt auf
+allen Plattformen (Validator vergleicht nur `/`-Glob mit `/`-Pfad), gemischte Separator-Traversals
+geschlossen, BDD R1 um Backslash-Fall.
+
 ## Purpose
 
 Constrain **where an agent may write** without giving it bespoke, agent-specific file tools. The write
@@ -17,8 +23,10 @@ model better than a wrapping decorator.
   `IllegalArgumentException` when the path is not allowed (so the normal `SmartToolExecutor` path turns
   it into an AI-visible tool error **and** an `onProblem` for the user). `WriteValidator.ALLOW_ALL` is
   the no-op default.
-- `AllowlistWriteValidator` holds a set of glob patterns, matched against the **raw path string the
-  model supplied**. Globs are translated to regex (`*` → `.*`), compiled **once** and cached in the
+- `AllowlistWriteValidator` holds a set of glob patterns, matched against the **normalized path** —
+  the model-supplied path with `\` converted to `/` and `.`/`..` segments resolved, unconditionally on
+  every platform (the globs are always `/`-based, so only like-with-like matching is meaningful; raw
+  matching would allow path traversal, e.g. `docs/../../secret.txt` or `a/docs/..\..\secret.txt`). Globs are translated to regex (`*` → `.*`), compiled **once** and cached in the
   shared `RegexUtils`. The constant `WriteValidator.DOCS` = `AllowlistWriteValidator("*/docs/*", "*.md")`.
 - `AiAgent.getWriteValidator()` returns `ALLOW_ALL` by default (a `default` method on the `AiAgent`
   interface). Only `AiPoAgent` (Jon) overrides it to `DOCS`. The validator rides on `ToolLoopRequest`,
@@ -43,6 +51,16 @@ model better than a wrapping decorator.
   WHEN the model calls a write tool with path `src/main/java/Foo.java`
   THEN `validate` throws, no file is written, the model receives the rejection as a tool error, and the
   user sees it via `onProblem`.
+* GIVEN the same agent
+  WHEN the model calls a write tool with path `a/docs/../../secret.txt`
+  THEN `validate` throws — the path is normalized before glob matching
+  (`a/docs/../../secret.txt` → `secret.txt`), so traversal cannot bypass the allowlist
+  (Bug-Hunt #9, 2026-09-04).
+* GIVEN the same agent
+  WHEN the model calls a write tool with path `a/docs/..\..\secret.txt` (mixed separators)
+  THEN `validate` throws — backslashes are normalized to `/` before segment resolution
+  (`a/docs/..\..\secret.txt` → `secret.txt`), so mixed-separator traversal cannot bypass the allowlist
+  (follow-up to Bug-Hunt #9, 2026-09-04).
 
 ### R2 — Default is allow-all
 
@@ -64,8 +82,7 @@ model better than a wrapping decorator.
 
 ## Notes
 
-- Same mechanism for disk and Eclipse: both validate the raw model-supplied path string, so the check is
-  project-agnostic (no `IProject` needed to decide "allowed or not").
-- Glob base nuance (from ADR-0022): matched against the raw path, `*/docs/*` covers `docs` at depth while
-  `*.md` covers any Markdown file; the exact base normalisation is refined when the pattern set becomes
-  configurable.
+- Same mechanism for disk and Eclipse: both validate the **normalized** model-supplied path string, so the
+  check is project-agnostic (no `IProject` needed to decide "allowed or not").
+- Glob base nuance (from ADR-0022): matched against the normalized path, `*/docs/*` covers `docs` at depth
+  while `*.md` covers any Markdown file; further base refinement when the pattern set becomes configurable.

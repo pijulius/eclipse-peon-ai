@@ -19,6 +19,10 @@ The status bar displays elapsed time, current phase, and tokens/second.
 - **GIVEN** a streaming response has just started **WHEN** the START chunk arrives **THEN** `#live-status` shows `waiting for AI...`
 - **Tag:** unit (verify `ChatMarkdownWidget.updateRunningChunk` computes state string and tokPerSec)
 
+> **Note (2026-09-05):** `waiting for AI...` appears **per LLM call** in a tool loop (each loop
+> iteration sends a new message via the ad-hoc `AIChatView.onChatMessage` path, not only on the
+> START chunk). Expected behavior, not a bug.
+
 ### R2 — Token count always visible in overlay preview ✅
 
 The second line of the overlay always shows the total tokens generated, even when live preview is disabled.
@@ -157,3 +161,91 @@ Alle UI-Nachrichten werden in einer Queue gepuffert, bis die HTML-Seite vollstä
 - **Tag:** unit (verify `ChatMarkdownWidget.postMessage` queues when not ready; verify `TitleListener` flushes queue)
 
 **Context:** Ohne Queue gehen Nachrichten beim Agentenwechsel oder nach einem `clear()` verloren, da die HTML-Seite kurzzeitig nicht empfangsbereit ist. Die Queue garantiert, dass jede Nachricht exakt einmal und in der richtigen Reihenfolge ankommt.
+
+
+### R17 — Config-Default für `showRealtimeAiResponse` ist `true` (✅ done, 2026-09-04)
+
+Loader-Default und Eclipse-Preference-Default müssen **beide** `true` sein — Checkbox und
+Verhalten dürfen nicht auseinanderlaufen (passt zu R2/R3 „default: enabled").
+
+- **GIVEN** der Key `llm.showRealtimeAiResponse` fehlt im Store **WHEN** die Config geladen wird **THEN** `isShowRealtimeAiResponse()` liefert `true`
+- **GIVEN** die Checkbox wird angezeigt **WHEN** der Key fehlt **THEN** sie ist angehakt (Default `true`)
+- **Tag:** unit (`LlmConfigLoader` mit leerem Store)
+
+**✅ fixed (Bug-Hunt #13, 2026-09-04):** nach dem Config-Clean-Break war der Loader-Default `false`
+(`LlmConfigLoader`: `parseBoolean(null, false)`) bei Preference-Default `true` — die Checkbox sah
+angehakt aus, das Widget bekam `false` → User sah nur „N tokens" statt Text. User-Entscheidung:
+Default = on.
+### R18 — Timer-Klasse (Millisekunden, generisch) ✅
+
+Eine generische `Timer`-Klasse in `org.sterl.llmpeon.shared` (core) misst Millisekunden.
+API: `start()`, `stop()`, `reset()`, `millis()` (Dauer oder laufende Zeit), `running()` (bool).
+Kein Thread-Sync nötig (ein Thread schreibt, UI-Thread liest — volatile long reicht).
+
+- **GIVEN** ein Timer **WHEN** `start()` **THEN** Startzeit (epoch millis) wird erfasst, `running()` = true
+- **GIVEN** ein Timer läuft **WHEN** `stop()` **THEN** Dauer = End − Start, `running()` = false
+- **GIVEN** ein Timer ist gestoppt **WHEN** `reset()` **THEN** Timer ist zurückgesetzt, `millis()` = 0
+- **GIVEN** ein Timer läuft **WHEN** `millis()` **THEN** liefert `now − start` (live)
+- **Tag:** unit
+
+### R19 — StreamingBridge: 4 Timer, korrekte toc/s ✅
+
+`StreamingBridge` hält 4 Timer und verwaltet sie pro `call()`:
+
+| Timer | Scope | Start | Stop | Reset |
+|---|---|---|---|---|
+| **Total** | Turn | Konstruktor | nie (läuft durch die Bridge-Lebenszeit — die Bridge kennt kein Turn-Ende) | nie |
+| **PP** | pro Call | `call()` Entry | erstes `onPartial*` (ANY Type) | pro `call()` |
+| **Token** | pro Call | erstes `onPartial*` | `onCompleteResponse` | pro `call()` |
+| **Think** | pro Call | `call()` Entry | erstes `onPartialThinking` | pro `call()` |
+
+**toc/s** = geschätzte Partial-Tokens (ANY Type: THINK + ANSWER + TOOL) / Token-Timer-Dauer.
+TOOL zählt den gestreamten Arguments-Delta (`partialArguments()`), nicht den Tool-Namen.
+Nicht aus dem Turn-Start (Total) — das war der Bug.
+Token-Zählung: bestehender Estimator (Text > 5 chars → `length() / 3`; ≤ 5 chars → 1 Token).
+Nicht: Callback-Count (jeder `onPartialResponse` = 1 Token — war der zweite Bug).
+
+`OnPartialAiResponse` bekommt ein Feld `tokenPhaseStart` (epoch millis, `0` = Token-Phase
+noch nicht gestartet). Statusleiste nutzt `tokenPhaseStart` für Rate, `startedAt` für
+"working since".
+
+- **GIVEN** ein Tool-Loop mit 3 LLM-Calls **WHEN** der 2. `call()` startet **THEN** PP- und Token-Timer werden neu gestartet (Total bleibt)
+- **GIVEN** Partial-Text gesamt 3000 chars (mix THINK/ANSWER/TOOL) in 2000ms Token-Phase **WHEN** Statusleiste rendert **THEN** toc/s ≈ "500 t/s" (3000/3 = 1000 Tokens / 2s)
+- **GIVEN** ein Non-Streaming-Modell sendet 1500 chars in 200ms **WHEN** Statusleiste rendert **THEN** toc/s = "2500 t/s" (500 Tokens / 0.2s — hoch, aber ehrlich)
+- **GIVEN** keine `onPartialThinking`-Callbacks im gesamten Turn **WHEN** Turn endet **THEN** Think-Timer ist nie gestoppt → Think-Zeit nicht verfügbar
+- **GIVEN** ein Call ist in der PP-Phase (noch kein Token) **WHEN** Statusleiste rendert **THEN** kein UI-Update (kein Chunk = kein Trigger); User sieht die Urzeit aus dem START-Chunk ("Started 12:24 waiting for AI...") und kann die Wartezeit mental ablesen
+- **Tag:** core (verify timer resets per call; verify toc/s uses token-timer not turn-start; verify tokenPhaseStart in OnPartialAiResponse)
+
+### R20 — Statusleiste zeigt "Started hh:mm" ✅
+
+Die Statusleiste zeigt die Turn-Startzeit (aus Total-Timer) zusätzlich zur Laufzeit.
+Format: `Started 14:32 · working since 3m 15s | <phase>... | <tok/s>`
+
+- **GIVEN** ein Turn startet um 14:32:05 **WHEN** Statusleiste rendert nach 3m 15s **THEN** zeigt `Started 14:32 · working since 3m 15s`
+- **GIVEN** ein Turn startet um 9:07 **WHEN** Statusleiste rendert **THEN** zeigt `Started 09:07` (leading zero)
+- **Tag:** unit (verify format includes hh:mm from Total-timer start Instant)
+
+### R21 — Token-Counting via Estimator (nicht Callback-Count) ✅
+
+Jeder `onPartialResponse`-Callback trägt einen Text-Snippet. Die Token-Anzahl wird aus dem
+Text geschätzt (bestehender Estimator), nicht als 1 pro Callback gezählt.
+
+- **GIVEN** ein `onPartialResponse` mit Text `"Hello world, how are you today?"` (32 chars) **WHEN** Tokens gezählt **THEN** 32/3 ≈ 10 Tokens (nicht 1)
+- **GIVEN** ein `onPartialResponse` mit Text `"Hi"` (2 chars, ≤ 5) **WHEN** Tokens gezählt **THEN** 1 Token
+- **GIVEN** ein `onPartialThinking` mit Text `"Let me think about this..."` (26 chars) **WHEN** Tokens gezählt **THEN** 26/3 ≈ 8 Tokens (THINK zählt mit)
+- **Tag:** unit (verify estimator used for token count; verify THINK/ANSWER/TOOL all counted)
+
+### R22 — Kein toc/s am ersten Token eines Calls ✅ (2026-09-05)
+
+Der erste Token eines Calls zeigt **kein** toc/s (Rate = 0 → JS blendet `| X.X tok/s` aus);
+ab dem **2. Token** desselben Calls wie bisher (R19). Der 1. Token wird trotzdem gezählt
+(R21) und die Statuszeile läuft normal ("Started … · working since …").
+
+**WEIL:** Am ersten Token ist die Token-Phase-Dauer ≈ 0 → der 1ms-Floor macht aus
+1 Token / 0.001 s einen sinnlosen Spike (`1000.0 t/s`). Gilt **pro Call** (nicht nur Turn) —
+jeder Call setzt `tokenPhaseStart` neu, also spikt jeder Call-Start (im Tool-Loop wiederholt).
+
+- **GIVEN** der erste Token eines Calls ist gerade angekommen **WHEN** Statusleiste rendert **THEN** kein toc/s-Teil (Rate 0), Statuszeile zeigt `Started … · working since 0s | <phase>...`
+- **GIVEN** der 2. Token desselben Calls ist angekommen **WHEN** Statusleiste rendert **THEN** toc/s = Tokens / Token-Phase-Dauer (wie R19)
+- **GIVEN** ein Tool-Loop mit mehreren Calls **WHEN** jeder Call startet **THEN** nur der 1. Token jedes Calls ohne Rate, ab 2. Token Rate (kein Spike pro Call)
+- **Tag:** unit (verify first token of a call → rate 0; 2nd token → rate; per-call reset)
