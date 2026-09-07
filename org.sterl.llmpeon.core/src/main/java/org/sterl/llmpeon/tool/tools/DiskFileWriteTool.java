@@ -8,6 +8,7 @@ import org.sterl.llmpeon.shared.AiMonitor.AiFileUpdate;
 import org.sterl.llmpeon.shared.ArgsUtil;
 import org.sterl.llmpeon.shared.FileLines;
 import org.sterl.llmpeon.shared.FileUtils;
+import org.sterl.llmpeon.shared.QualifiedPathValidator;
 
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -60,7 +61,7 @@ public class DiskFileWriteTool extends AbstractTool {
                 monitor.onFileUpdate(new AiFileUpdate(workingDir.relativize(resolved).toString(), oldContent, content));
             }
             
-            onTool((existed ? "Updated" : "Created") + " file: " + workingDir.relativize(resolved));
+            onTool((existed ? "Updated" : "Created") + " file: " + resolved);
         } catch (IOException e) {
             throw new RuntimeException("Failed to write " + filePath, e);
         }
@@ -85,7 +86,7 @@ public class DiskFileWriteTool extends AbstractTool {
             } else {
                 Files.delete(resolved);
             }
-            onTool("Deleted: " + workingDir.relativize(resolved));
+            onTool("Deleted: " + resolved);
         } catch (IOException e) {
             throw new RuntimeException("Failed to delete " + filePath, e);
         }
@@ -143,19 +144,21 @@ public class DiskFileWriteTool extends AbstractTool {
             monitor.onFileUpdate(result);
 
             var verb = newString.isEmpty() ? "deleted" : "replaced";
-            return verb + " " + edit.count() + " occurrence(s) in " + workingDir.relativize(resolved);
+            return verb + " " + edit.count() + " occurrence(s) in " + resolved;
         } catch (IOException e) {
             throw new RuntimeException("Failed to edit " + filePath, e);
         }
     }
 
-    @Tool("Rename or move a file or directory. Creates target parent folders.")
-    public void diskRenameResource(
-            @P(name = "sourcePath") String sourcePath,
-            @P(name = "targetPath") String targetPath) {
+    @Tool("Rename or move a file or directory. Creates target parent folders. Paths must be absolute.")
+    public String diskRenameResource(
+            @P(name = "sourcePath", description = "absolute source path") String sourcePath,
+            @P(name = "targetPath", description = "absolute target path") String targetPath) {
 
         ArgsUtil.requireNonBlank(sourcePath, "sourcePath");
         ArgsUtil.requireNonBlank(targetPath, "targetPath");
+        QualifiedPathValidator.requireQualifiedDisk("Rename", sourcePath);
+        QualifiedPathValidator.requireQualifiedDisk("Rename", targetPath);
 
         Path source = resolve(sourcePath);
         if (source == null || !Files.exists(source)) {
@@ -171,10 +174,36 @@ public class DiskFileWriteTool extends AbstractTool {
         try {
             if (target.getParent() != null) Files.createDirectories(target.getParent());
             Files.move(source, target);
-            onTool("Renamed " + workingDir.relativize(source) + " -> " + workingDir.relativize(target));
+            var result = "Renamed " + source + " -> " + target;
+            onTool(result);
+            return result;
         } catch (IOException e) {
             throw new RuntimeException("Failed to rename " + sourcePath + " -> " + targetPath, e);
         }
+    }
+
+    @Tool("Copy a file to a new location. Creates target parent folders. The original is kept; no overwrite. Paths must be absolute.")
+    public String diskCopyFile(
+            @P(name = "sourcePath", description = "absolute source path") String sourcePath,
+            @P(name = "targetPath", description = "absolute target path") String targetPath) {
+
+        ArgsUtil.requireNonBlank(sourcePath, "sourcePath");
+        ArgsUtil.requireNonBlank(targetPath, "targetPath");
+        QualifiedPathValidator.requireQualifiedDisk("Copy", sourcePath);
+        QualifiedPathValidator.requireQualifiedDisk("Copy", targetPath);
+
+        Path source = resolve(sourcePath);
+        if (source == null) {
+            throw new IllegalArgumentException("Cannot resolve path: " + sourcePath);
+        }
+        Path target = resolve(targetPath);
+        if (target == null) {
+            throw new IllegalArgumentException("Cannot resolve path: " + targetPath);
+        }
+        FileUtils.copy(source, target);
+        var result = "Copied " + source + " -> " + target;
+        onTool(result);
+        return result;
     }
 
     @Tool("Insert text into a file at a specific position. Omit afterLine to append at end. 0 inserts before the first line (prepend). 1..n inserts after that line.")

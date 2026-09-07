@@ -1,57 +1,54 @@
-# Session-Stand (2026-09-05)
+# Session-Stand (2026-09-07)
 
-## Nächste Session = Smoke-Test (User testet den neuen Build)
+## Git-Stand
 
-User testet 2.7.1 + Jon-AskUser. Erwartbar:
-- **askUser (R17):** Question-Widget erscheint jetzt **auch bei Jon** — matched/queue-safe Antwort,
-  Stop = Cancel-Error. Slaven (Da Thinka/Da Mek) + Search-Agent: **kein** askUser (R9, unverändert).
-- **Streaming:** toc/s aus Token-Phase, **kein Spike am 1. Token eines Calls** (R22), "Started hh:mm".
-- **Edit-Tools E2E:** Spec in `org.sterl.llmpeon.test/ai-e2e-test/file-edit-tools.txt`
-  (disk + eclipse, write counter, editLine + replaceLine).
-  ⚠️ **Item 3 (Line-Ending-Normalisierung) ist NICHT gebaut** → dort rot = erwartet, kein
-  Regression — SOLL steht im geparkten Edit-Tools-Punkt (open-points.md).
-- **planImplemented:** Kollision → Counter-Suffix (`…-1.md`), nie "already exists" (R-PI1).
+- **`release-2026-09-06` @ `01c76ba`** (gepusht bis `4fc1008`, lokal 5 neue Commits:
+  b011576 R6 · f14371a R5 · 402b922 + 7d224ec R-UI1/Review-Fix · 01c76ba cycle-close) —
+  **Merge/Squash in main + Push = User-Entscheidung.** Main = origin/main `1f204aa` (User
+  reviewed dort den Release; sein Squash-Merge des ersten Release-Stands stand noch aus —
+  Stand bei Session-Start: "patch eingespielt" lief lokal).
+- Alte lokale Branches: state-config-2026-09-06, toc-estimate-2026-09-06, sm-fixes-2026-09-06
+  (→ renamed zu release-2026-09-06), alle intakt.
+- **Core 678/0 · Plugin 191/0.** Plan archiviert: peon-plan/overview-done-2026-09-07-10-20.md.
+- Nicht committet: test_project/issue.md + Test-Artefakte (renameRootDst_*, sub/) — bewusst.
 
-**Nach dem Smoke-Test — User-Entscheidungen offen:**
-1. **E5:** Disk-Tool Success-Message — (a) workingDir-Relative-Pfad lassen [PO-Empfehlung] oder
-   (b) absoluter Pfad? (User hatte "BUG/KV-Cache" gesagt.)
-2. **Merge:** `jon-askuser-2026-09-05` → main.
-3. **Triage-Liste (#5–#12, #14–#16):** GO für nächsten Bug-Fix-Zyklus (Fixes sind gewählt,
-   siehe unten) + Plugin-Hunt.
-4. **5 kleine ❓-Punkte** (open-points.md): UTF-8-Write · Glossar eager · PDE-Skip-Count ·
-   Smoke-Test-Kosmetik/Dropdown-Klassen · `buildWithDev`-Compact — User kann "nimm deine
-   Empfehlungen" sagen (PO: fixen · (b) Turn-Context · ja · löschen · Compact ~50 % nur neuer Plan).
+## Zyklus `file-copy-e2e-fixes-2026-09-06` — ABGESCHLOSSEN ✅
 
-## In Flight: Jon-AskUser (Branch `jon-askuser-2026-09-05`, von `main`)
+- **Auslöser:** Copy-Tools-E2E (Test-Anleitung copy-tools-e2e-test.md von mir angelegt,
+  User-Ausführung im isolierten Testprojekt → 4 Befunde in test_project/issue.md).
+- **Behoben:** R6 (`Copied/Renamed <s> -> <t>` LLM-sichtbar, void→String, war langchain4j-`"Success"`)
+  · R5 Qualified Paths Only (beide Familien, Copy+Rename, source+target; QualifiedPathValidator;
+  eclipse-Ziel-Resolution-Fix — Workspace-Root-Fallback/1-Segment-Crash weg) · R-UI1
+  (Question-Widget-Regression: finaler Scroll-to-bottom nach Widget-Completion, manuelle Verifikation).
+- **Review:** Da Thinka 3-Seiten — 1 echter Fund (duplizierte Methoden in ChatMarkdownWidget,
+  inc-3-ReplaceLines-Falle, gefixt 7d224ec) + Mutations-Nachweis R5 (`projectExists` →
+  `eclipse_unknownProjectRejected` rot, sonst grün).
+- Docs geflippt: file-copy-tool.md ✅ R1–R6 · user-question-tool-design.md R-UI1 ✅ · index.md.
+- Test-Anleitung copy-tools-e2e-test.md: `diskRenameFile` → `diskRenameResource` korrigieren
+  (Befund 3 des E2E) — **steht aus, kosmetisch**.
 
-**R17 (po-agent-jon.md ✅):** Jon bekommt `AskUserTool` in seine `poToolService` (dieselbe
-Instanz aus dem shared Service, `BuildPoAgentComponent:78`; headless = kein askUser).
-R13-Klärung: "never blocks" = Slave-Fragen-Eskalation, nicht direkte User-Entscheidungen.
-**Commits:** `3b90fad` Code + Tool-Beschreibung (plain text only (no Markdown); Cancel-Note) ·
-`2c9ccb6` Docs. **Ground Truth:** Core **632/632** · OSGi **179/179** (2 neue Tests: Membership
-+ Slaven-Filter). **PO-Acceptance ✅.**
-**⚠️ User-WIP vermischt:** Code-Commit trug User-WIP-Zeilen in `AIChatView.java` mit
-(refreshChat-Javadoc + deduped `refreshStatusLine`); `StatusLineWidget.java` + `UserContext.java`
-= User-WIP mid-change, uncommitted.
+## User-Entscheidungen (Stand)
 
-## Shipped (in `main`, 2026-09-04/05)
+- R5 gilt **beide Familien, Copy + Rename** (User bestätigt). Begründung: stiller Falsch-Ort
+  vs. lauter Fehler (Single-File-Ops bleiben Domain-Basis-Resolution).
+- po.txt/dev-build-loop.txt Prompt-Änderungen (CONTEXT-LIMIT-Regel, Branch-Regeln inkl.
+  main/master-Zeile + detached-HEAD) — User-Edits, committed.
 
-- **Bug-Hunt** (Merge `db92e1b`): #1 applyEdit-Count, #2 ShellTool tail+filter, #3 CustomAgent
-  null-Allowlist, #4 startedAt pro Turn, #9 Traversal (+follow-up `\`→`/`), #13
-  showRealtimeAiResponse Default on.
-- **Streaming-Timing** (Merge `86594a4`, gepusht): R18–R21 (Timer-Klasse, toc/s aus Token-Timer,
-  "Started hh:mm", TOOL-Delta) + **R22** (kein toc/s am 1. Token eines Calls, pro Call) +
-  **R-PI1** (planImplemented-Kollision → Counter-Suffix, core `ArchiveName.firstFreeName`).
+## Nächste Schritte
 
-## Geparkt
+1. **User:** Squash-Merge release-2026-09-06 → main nach Review + Push (beide Runden: der
+   erste Release-Stand war evtl. schon gesquasht — Git-Verlauf prüfen, nicht doppelt).
+2. **Bug-Fix-Zyklus:** Triage #5–#15 (Tabelle siehe unten) + ApiRetry-Verdacht (Null-Byte-
+   IOException als Cancel klassifiziert? ❓ open-points.md, verwandt Memory #21) + Plugin-Hunt
+   + **NEU: AgentOrder Auto-Create-Fehlschlag killt Agent-Reload** (Known Edge in
+   agent-ordering.md — read-only Config-Dir → gar keine Agenten; robust = weiter ohne Ordering).
+3. Offene ❓: Glossar eager ((b) Turn-Context-Item) · buildWithDev-Compact (Compact, ~50 %,
+   nur neuer Plan) — Empfehlungen in open-points.md, „nimm deine Empfehlungen" genügt.
+4. E2E-Erweiterungen möglich: Copy-Tools-Rerun auf dem gefixten Build (Anleitung liegt bereit),
+   Edit-Tools-E2E (Line-Ending-Item 3 weiter ungeparkt).
+5. Ideen-Backlog: Jon×Scaffold · builtin-agent-prompt-override (🚧) · eclipseJavaMoveType (🚧).
 
-- **Edit-Tools** → [open-points.md](open-points.md): Rename auf "Edit", gemeinsame Doku (4 Tools),
-  `planEdit`-Count, Eclipse-Doku-Konflikt, `AiFileUpdate`-Nebenbefund, **Line-Ending-
-  Normalisierung** (User-E2E-Spec 2026-09-05, ersetzt E3-Skip).
-- Cleanup-Kandidaten (eigener Zyklus): `StreamingBridge.clock`-Feld redundant (assigned, nie
-  gelesen); `EclipseUtil.editInEditor` Dead Code (0 Referenzen).
-
-## Triage-Liste (offen — #1–#4, #9, #13 sind shipped)
+## Triage-Liste (offen — #1–#4, #9, #13, #16 shipped)
 
 | # | Fehler | Modul | Fix (Jon gewählt) |
 |---|---|---|---|
@@ -64,24 +61,22 @@ R13-Klärung: "never blocks" = Slave-Fragen-Eskalation, nicht direkte User-Entsc
 | 12 | `FileLines.extract(0,0)` → RAW-Content ohne Zeilennummern, Javadoc sagt 0 → 1/last nummriert | core | 0 als 1/last → nummriert (disk+eclipse konsistent) |
 | 14 | `AnthropicProvider.listAiModels`: hardcodet `api.anthropic.com`, ignoriert custom `baseUrl` (Proxy→401) | core | `baseUrl` aus Config nutzen |
 | 15 | `VoiceInputService`: doppeltes `startRecording` leakt die alte Line | core | Alte Line vor neuem Start schließen |
-| 16 | `ModelListCacheTest.concurrentGetOrFetch_sameIdentity_singleFlight` timing-flakig (Full-Run 1× rot, solo 5/5 grün) | core | offen — gefunden 2026-09-05 |
 
-**Ablauf pro Fehler (User-Vorgabe):** Rot-Test (Da Mek) → Jon prüft Rot-Test → Fix (von Jon
-gewählt) → Grün → Commit. Inkremente klein bündeln (2–4 Fehler/Increment), Review via Da Thinka
-am Ende. **Plugin-Hunt** (Da Mek) steht noch aus.
+**Ablauf pro Fehler (User-Vorgabe):** Rot-Test (Da Mek) → Jon prüft Rot-Test → Fix → Grün →
+Commit. Inkremente klein bündeln (2–4 Fehler/Increment), Review via Da Thinka am Ende.
+Plugin-Hunt (Da Mek) steht noch aus.
 
-## Skips (dokumentierte Entscheidungen / bereits getrackt)
+## Geparkt / Wissenswert
 
-- Unbounded Query-Caches (`SearchQuery.CACHE`, `RegexUtils.GLOB_CACHE`) — ⏳ in open-points.md
-- `ModelListCache` ohne Eviction — „no eviction needed" dokumentiert (ConfiguredChatModel-Javadoc)
-- `SearchAgentTool` teilt parent `ApiRetry` — Design-Eigenheit
-- `FileAgentHistoryStore` History-Wipe bei korrupter Zeile — dokumentiert
-- `McpService` Connection-Wipe bei Fehler — dokumentiert
-
-## Übernommen aus Release-Zyklus (2026-09-03/04, noch offen für User)
-
-- ⏳ unbegrenzte Query-Caches (siehe Skips)
-- ❓ in open-points.md: Glossar eager laden · `buildWithDev` compactet Da Mek vorher ·
-  `eclipseWriteFile` immer UTF-8 · PDE-Runner meldet Skips nicht separat · Smoke-Test-Kosmetik
-- issues/fact-issues.md: Punkt 3 (CancellationException-Stacktrace als Error), Punkt 5 (Node-20-Deprecation)
-- Untracked: `release-notes-2026-09-04.md`
+- **Edit-Tools** (open-points.md): Rename auf "Edit", gemeinsame Doku, planEdit-Count,
+  Line-Ending-Normalisierung (User-E2E-Spec, ersetzt E3-Skip). Reihenfolge: Rename → Doku →
+  Count → Line-Ending. E2E-Spec: file-edit-tools.txt. ⚠️ Item 3 NICHT gebaut = rot im E2E ist
+  erwartet.
+- Cleanup-Kandidaten: `StreamingBridge.clock` redundant; `EclipseUtil.editInEditor` Dead Code;
+  leerer /org.sterl.llmpeon/docs/adr-Restordner; test_project/issue.md nach Bug-Fix-Zyklus löschen.
+- E2E-Tool-Namens-Falle: Tools heißen `diskRenameResource`/`eclipseRenameResource` (nicht
+  *RenameFile) — in neuen Test-Anleitungen exakt prüfen.
+- Docs-Lage: docs/** = /llmpeon-parent/docs/. Agent-Ordering neu dokumentiert
+  (agent-ordering.md ✅ #128). Custom-Dropdown-Klassen gelöscht (2026-09-06).
+- open-points.md: ❓ ApiRetry · ❓ Glossar eager · ❓ buildWithDev-Compact · ⏳ Query-Caches ·
+  ⏳ Streaming-Präzisierungen · ⏳ Edit-Tools.

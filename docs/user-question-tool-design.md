@@ -28,6 +28,28 @@ Selecting a radio pre-fills the text field; the field stays editable so the user
 The **Answer** button (and `Ctrl/Cmd+Enter`) always submits whatever is in the text field.
 On submit the normal input reappears and the LLM receives the answer string.
 
+## UI Rules
+
+### R-UI1: Frage vollständig sichtbar ✅ (User 2026-09-06, E2E-Regression — gebaut inc-3 `402b922`)
+Wenn das Question-Widget erscheint, ist die Frage-Nachricht im Chat **vollständig sichtbar** —
+nichts davon wird vom (potenziell höheren) Widget verdeckt.
+
+- **GIVEN** das Question-Widget wird angezeigt **WHEN** die frage tragende Chat-Nachricht
+  gerendert ist **THEN** das Widget (mit Optionen) wird **nach** der Nachricht aufgebaut und
+  der Chat scrollt ans Ende — die letzte Zeile der Frage ist lesbar
+- **GIVEN** das Widget inkl. Optionen ist höher als der freie Bereich unter der Frage
+  **WHEN** gerendert **THEN** endet der View auf der Frage, nicht auf dem Widget — kein
+  verdeckter Teil der Frage
+- **Umsetzung (gebaut):** finaler Scroll-to-bottom **nach** Widget-Completion über das
+  Chat-Widget (`ScrollToBottomCommand` → chat.html `scrollToBottom()`, aufgerufen in
+  `AIChatView.showQuestion` nach den Layout-Calls). Kein automatisierter Test möglich
+  (SWT-Browser, kein Harness) — manuelle Verifikation: Frage mit Widget > Input-Höhe
+  erzeugen, letzte Zeile der Frage muss lesbar sein.
+
+**Regression-Historie:** Beim Question-Widget-Erscheinen wurde die Nachricht erneut in
+chat.html eingefügt und die Optionen danach gebaut — ragten die Optionen über die
+Input-Höhe hinaus, verdeckten sie einen Teil der Frage.
+
 ## Key Technical Decisions
 
 | Concern | Decision |
