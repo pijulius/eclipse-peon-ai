@@ -44,7 +44,6 @@ import org.sterl.llmpeon.parts.log.EclipseSlf4jLogger;
 import org.sterl.llmpeon.parts.monitor.EclipseAiMonitor;
 import org.sterl.llmpeon.parts.shared.EclipseUtil;
 import org.sterl.llmpeon.parts.shared.SimpleDiff;
-import org.sterl.llmpeon.parts.tools.AskUserTool;
 import org.sterl.llmpeon.parts.widget.ActionsBarWidget;
 import org.sterl.llmpeon.parts.widget.ChatMarkdownWidget;
 import org.sterl.llmpeon.parts.widget.HeaderBarWidget;
@@ -83,7 +82,9 @@ public class AIChatView implements EclipseAiMonitor {
         this::doSendMessage,
         file -> EclipseUtil.runInUiThread(parent, () -> EclipseUtil.openInEditor(file)),
         enabled -> EclipseUtil.runInUiThread(parent, () -> statusLine.setMcpEnabled(enabled)),
-        () -> EclipseUtil.runInUiThread(parent, this::refreshAgentUI)
+        () -> EclipseUtil.runInUiThread(parent, this::refreshAgentUI),
+        LlmPreferenceInitializer.buildWithDefaults().build(),
+        this::showQuestion
     );
 
     private final AtomicReference<IProgressMonitor> monitorRef = new AtomicReference<>(new NullProgressMonitor());
@@ -184,10 +185,6 @@ public class AIChatView implements EclipseAiMonitor {
         prefs.addPreferenceChangeListener(prefListener);
         updateSelectedProject(EclipseUtil.firstOpenOrSelectedProject());
 
-        aiService.getSharedToolService().addTool(new AskUserTool(
-            (question, answers, onAnswer) -> showQuestion(question, answers, onAnswer)
-        ));
-
         chatInput.enableSlashCommands(() -> {
             var result = new ArrayList<SimplePromptFile>();
             result.addAll(aiService.getCommandService().getCommands());
@@ -254,7 +251,9 @@ public class AIChatView implements EclipseAiMonitor {
             LOG.info("Unknown resource type selected " + selectionElement.getClass());
         }
         aiService.getUserContext().setTextSelection(null);
-        aiService.getUserContext().setSelectedResource(selection);
+        if (aiService.getUserContext().setSelectedResource(selection)) {
+            EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
+        }
         updateSelectedProject(EclipseUtil.resolveProject(selection));
     }
 
@@ -355,6 +354,10 @@ public class AIChatView implements EclipseAiMonitor {
         actionsBar.updateCompact(ai.getMemory().getTotalTokenUsed(), aiService.getConfig().getAutoCompactAfter());
     }
 
+    /**
+     * clears the chat history and rebuilds it.
+     * Also calls refresh refreshStatusLine.
+     */
     private void refreshChat() {
         chatHistory.clear();
         refreshStatusLine();
@@ -468,7 +471,6 @@ public class AIChatView implements EclipseAiMonitor {
             AiAgent agent = aiService.getActiveAgent();
             actionsBar.updateModeUI(agent);
             this.refreshChat();
-            this.refreshStatusLine();
             doSendMessage();
         } else {
             onChatResponse(new SimpleMessage(Type.PROBLEM, "Plan or Agent '" + aiService.getActiveAgent().handoverTo() + "' missing ..."));
