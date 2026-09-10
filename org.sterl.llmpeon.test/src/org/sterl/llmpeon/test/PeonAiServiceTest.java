@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.ResourcesPlugin;
@@ -46,11 +47,13 @@ import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.poagent.tools.PoDelegateTool;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
 import org.sterl.llmpeon.scaffold.ReloadConfigTool;
+import org.sterl.llmpeon.skill.SkillService;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.tool.tools.CompactSessionTool;
 import org.sterl.llmpeon.tool.tools.DiskFileReadTool;
 import org.sterl.llmpeon.tool.tools.DiskFileWriteTool;
 import org.sterl.llmpeon.tool.tools.DiskGrepTool;
+import org.sterl.llmpeon.tool.tools.SkillTool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -132,6 +135,19 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
     }
 
     @Test
+    public void test_jon_gets_shared_skill_tool() {
+        // GIVEN a running service (R16)
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        var po = aiService.getAgents().stream().filter(AiPoAgent.class::isInstance)
+                .map(AiPoAgent.class::cast).findFirst().orElseThrow();
+
+        // THEN Jon's curated tool service contains the SAME shared SkillTool instance
+        var sharedSkillTool = aiService.getSharedToolService().getTool(SkillTool.class);
+        assertIsPresent(sharedSkillTool);
+        assertSame(sharedSkillTool.get(), po.getToolService().getTool(SkillTool.class).orElseThrow());
+    }
+
+    @Test
     public void poAgentSlavesStillFilterAskUser() {
         // GIVEN a service built with a question presenter (R17)
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
@@ -141,8 +157,8 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         var askUser = svc.getSharedToolService().getExecutors().stream()
                 .filter(e -> e.getTool() instanceof AskUserTool).findFirst().orElseThrow();
 
-        // THEN Da Thinka / Da Mek still filter askUser out (R9 unchanged)
-        for (var slaveName : List.of("Da Thinka", "Da Mek")) {
+        // THEN Da Thinka / Da Dok / Da Mek still filter askUser out (R9 unchanged)
+        for (var slaveName : List.of("Da Thinka", "Da Dok", "Da Mek")) {
             var slave = po.getTeam().stream().filter(n -> n.uiName().equals(slaveName))
                     .findFirst().orElseThrow().agent();
             assertFalse(slaveName + " must not get askUser (R9)", slave.isToolActive(askUser));
@@ -215,7 +231,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
                 .providerType(AiProvider.OPEN_AI)
                 .url(mockLlmServer.getUrl()).build());
         mockLlmServer.queueResponse(AiMessage.aiMessage("Pong"));
-        var skills = PeonTestFixture.repoRoot().toPath().resolve("skills");
+        var skills = PeonTestFixture.repoRoot().toPath().resolve(SkillService.PROJECT_SKILLS_DIR);
         assertTrue(Files.exists(skills));
         aiService.getSkillService().refresh(skills);
 
@@ -614,14 +630,14 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
 
     // --- Header status widget MVP (agenten-status-im-header-mvp-plan.md, ADR-0025) -------------
 
-    /** GIVEN Jon is active THEN getStatusAgents() is his team: Da Boss first, then Da Thinka, Da Mek. */
+    /** GIVEN Jon is active THEN getStatusAgents() is his team: Da Boss first, then Da Thinka, Da Mek, Da Dok. */
     @Test
     public void test_status_agents_are_jons_team_when_po_active() {
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
         aiService.setActiveAgent(AiPoAgent.NAME);
 
         var uiNames = aiService.getStatusAgents().stream().map(n -> n.uiName()).toList();
-        assertEquals(List.of("Da Boss", "Da Thinka", "Da Mek"), uiNames);
+        assertEquals(List.of("Da Boss", "Da Thinka", "Da Mek", "Da Dok"), uiNames);
     }
 
     /** GIVEN any other agent is active THEN the status widget shows nothing (empty list). */
@@ -1375,6 +1391,124 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         } finally {
             wmt.memoryReset();
         }
+    }
+
+    // --- ADR-0042: Project Skill Slot (docs/project-skills.md R2a/R2b/R2c) -------
+
+    /**
+     * ADR-0042 (R2a/R2b): switching the project replaces ONLY the project skill slot — the config
+     * slot is untouched (masked config skills survive), the previous project's skills are gone.
+     */
+    @Test
+    public void setProject_replacesProjectSlotOnly() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var otherProject = ResourcesPlugin.getWorkspace().getRoot().getProject("aaa_other");
+        if (otherProject.exists()) otherProject.delete(true, true, new NullProgressMonitor());
+        otherProject.create(new NullProgressMonitor());
+        otherProject.open(new NullProgressMonitor());
+
+        var configSkillsDir = aiService.getConfig().getConfigDir().resolve(LlmConfig.SKILL_DIRECTORY);
+        var fixtureSkillsDir = Files.createDirectories(
+                Path.of(JdtUtil.diskPathOf(project)).resolve(SkillService.PROJECT_SKILLS_DIR));
+        var otherSkillsDir = Files.createDirectories(
+                Path.of(JdtUtil.diskPathOf(otherProject)).resolve(SkillService.PROJECT_SKILLS_DIR));
+        try {
+            // GIVEN: one config skill + one project skill each for the fixture and aaa_other
+            Files.writeString(Files.createDirectories(configSkillsDir).resolve("cfg-skill.md"),
+                    "---\nname: cfg-skill\ndescription: config skill\n---\nConfig body.");
+            aiService.getSkillService().refresh(configSkillsDir);
+            Files.writeString(fixtureSkillsDir.resolve("fixture-skill.md"),
+                    "---\nname: fixture-skill\ndescription: fixture project skill\n---\nFixture body.");
+            Files.writeString(otherSkillsDir.resolve("other-skill.md"),
+                    "---\nname: other-skill\ndescription: other project skill\n---\nOther body.");
+
+            // WHEN: the fixture project is selected
+            aiService.setProject(project);
+
+            // THEN: the config skill + the fixture's project skill are visible
+            var names = skillNames(aiService);
+            assertTrue("expected cfg-skill: " + names, names.contains("cfg-skill"));
+            assertTrue("expected fixture-skill: " + names, names.contains("fixture-skill"));
+
+            // WHEN: switch to aaa_other
+            aiService.setProject(otherProject);
+
+            // THEN: aaa_other's project skill is present, the config skill survived (R2b),
+            // the fixture's project skill is gone (R2a)
+            names = skillNames(aiService);
+            assertTrue("expected other-skill: " + names, names.contains("other-skill"));
+            assertTrue("config slot must survive the project switch: " + names, names.contains("cfg-skill"));
+            assertFalse("old project skill must be gone: " + names, names.contains("fixture-skill"));
+        } finally {
+            deleteRecursively(fixtureSkillsDir.getParent());
+            deleteRecursively(otherSkillsDir.getParent());
+            Files.deleteIfExists(configSkillsDir.resolve("cfg-skill.md"));
+            if (otherProject.exists()) otherProject.delete(true, true, new NullProgressMonitor());
+        }
+    }
+
+    /**
+     * ADR-0042 (R2c, pinning) — service-level contract: the project skill slot is replaced ONLY by
+     * {@code setProject}. The pin action itself never calls it (AIChatView.onPinChange only flips
+     * the pin flag) and a selection while pinned is guarded in the view (manual UI territory), so
+     * the slot stays on the pinned project until the unpin-with-selection re-calls setProject.
+     * Declared characterization for the pin-flag half (the flag alone changes nothing by design);
+     * the falsifiable proof is the slot following — and only following — setProject.
+     */
+    @Test
+    public void pinnedProject_keepsSkillComponent_untilSetProject() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var otherProject = ResourcesPlugin.getWorkspace().getRoot().getProject("aaa_other");
+        if (otherProject.exists()) otherProject.delete(true, true, new NullProgressMonitor());
+        otherProject.create(new NullProgressMonitor());
+        otherProject.open(new NullProgressMonitor());
+
+        var fixtureSkillsDir = Files.createDirectories(
+                Path.of(JdtUtil.diskPathOf(project)).resolve(SkillService.PROJECT_SKILLS_DIR));
+        var otherSkillsDir = Files.createDirectories(
+                Path.of(JdtUtil.diskPathOf(otherProject)).resolve(SkillService.PROJECT_SKILLS_DIR));
+        try {
+            // GIVEN: fixture project (A) selected — its project skill is in the slot
+            Files.writeString(fixtureSkillsDir.resolve("fixture-skill.md"),
+                    "---\nname: fixture-skill\ndescription: fixture project skill\n---\nFixture body.");
+            Files.writeString(otherSkillsDir.resolve("other-skill.md"),
+                    "---\nname: other-skill\ndescription: other project skill\n---\nOther body.");
+            aiService.setProject(project);
+            var names = skillNames(aiService);
+            assertTrue("expected fixture-skill: " + names, names.contains("fixture-skill"));
+
+            // WHEN: the user pins A and selects a resource in B — the view guard keeps
+            // setProject away from the service (UI contract, no service call here)
+            aiService.getUserContext().setProjectPinned(true);
+
+            // THEN: the slot stays on A
+            names = skillNames(aiService);
+            assertTrue("pinned slot must stay on A: " + names, names.contains("fixture-skill"));
+            assertFalse("B must not leak in: " + names, names.contains("other-skill"));
+
+            // WHEN: unpin with selection in B — the view re-calls setProject(B)
+            aiService.getUserContext().setProjectPinned(false);
+            aiService.setProject(otherProject);
+
+            // THEN: the slot switches to B
+            names = skillNames(aiService);
+            assertTrue("expected other-skill: " + names, names.contains("other-skill"));
+            assertFalse("old project skill must be gone: " + names, names.contains("fixture-skill"));
+        } finally {
+            aiService.getUserContext().setProjectPinned(false);
+            deleteRecursively(fixtureSkillsDir.getParent());
+            deleteRecursively(otherSkillsDir.getParent());
+            if (otherProject.exists()) otherProject.delete(true, true, new NullProgressMonitor());
+        }
+    }
+
+    /** Lowercase skill names currently visible in the effective view (config + project slots). */
+    private static List<String> skillNames(PeonAiService svc) {
+        return svc.getSkillService().getAllLoadedSkills().stream()
+                .map(s -> s.getName().toLowerCase(Locale.ROOT))
+                .toList();
     }
 
     // --- helpers for the replica tests ------------------------------------------
