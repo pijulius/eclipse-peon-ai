@@ -1,7 +1,9 @@
 package org.sterl.llmpeon.parts.ai;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -25,6 +27,7 @@ import org.sterl.llmpeon.parts.ai.component.BuildPoAgentComponent;
 import org.sterl.llmpeon.parts.ai.component.SharedToolsComponent;
 import org.sterl.llmpeon.parts.config.LlmPreferenceInitializer;
 import org.sterl.llmpeon.parts.config.McpConnectionService;
+import org.sterl.llmpeon.parts.shared.EclipseUtil;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
 import org.sterl.llmpeon.parts.tools.AskUserTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
@@ -140,7 +143,11 @@ public class PeonAiService {
         agentService  = new AgentService(true,
                 config.getConfigDir().resolve(LlmConfig.AGENT_DIRECTORY), sharedToolService, configuredModel, stateDir);
 
-        scaffoldAgent = new AiScaffoldAgent(configuredModel);
+        // R15: a successful scaffold disk write deterministically refreshes the skill view.
+        scaffoldAgent = new AiScaffoldAgent(configuredModel, skillService);
+        // ADR-0043: the scaffold may write into the .agents/skills dir of every open project
+        // (read at validate time, R10) — in addition to the config dir.
+        scaffoldAgent.setProjectSkillsRootsSupplier(this::projectSkillsRoots);
         scaffoldAgent.addTool(new SkillTool(skillService));
         // ReloadConfigTool needs agentService (already created) + skillService + commandService + config.
         // Its callback fires after the reloadAgents() inside the tool, so wrap it: re-bake the Env
@@ -204,7 +211,8 @@ public class PeonAiService {
         
         var dir = config.getConfigDir().resolve(LlmConfig.SKILL_DIRECTORY);
         try {
-            skillService.refresh(dir);
+            skillService.refresh(dir);    // config slot: set + refresh (compat semantics)
+            skillService.refreshAll();    // R3: the project slot is refreshed as well
         } catch (IOException e) {
             throw new RuntimeException("Failed to load skills from " + dir, e);
         }
@@ -257,7 +265,23 @@ public class PeonAiService {
             sharedTools.diskFileReadTool().setWorkingDir(projectPath);
             sharedTools.diskGrepTool().setWorkingDir(projectPath);
         }
+        // ADR-0042: project skill slot — this is the single choke point that replaces it;
+        // null project = empty slot, the config slot stays untouched (R2b)
+        try {
+            skillService.setProjectSkillsDir(projectPath == null ? null : Path.of(projectPath).resolve(SkillService.PROJECT_SKILLS_DIR));
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load project skills from " + projectPath, e);
+        }
         return this.userContext.setCurrentProject(project);
+    }
+
+    /** ADR-0043: the {@code .agents/skills} dir of every open project, read at validate time (R10). */
+    private List<Path> projectSkillsRoots() {
+        return EclipseUtil.openProjects().stream()
+                .map(JdtUtil::diskPathOf)
+                .filter(Objects::nonNull)
+                .map(diskPath -> Path.of(diskPath).resolve(SkillService.PROJECT_SKILLS_DIR))
+                .toList();
     }
 
     // -------------------------------------------------------------------------
@@ -350,7 +374,7 @@ public class PeonAiService {
 
     /**
      * The agents shown in the header status widget: when Jon (Peon-PO) is active, his
-     * {@link AiPoAgent#getTeam() team} (Da Boss + the two orks Da Thinka/Da Mek); for every other
+     * {@link AiPoAgent#getTeam() team} (Da Boss + the orks Da Thinka/Da Mek/Da Dok); for every other
      * agent an empty list — they show nothing. This is the <b>single</b> {@code instanceof AiPoAgent}
      * choke-point (ADR-0025): the widget pulls this list and stays type-agnostic, the {@code AiAgent}
      * interface stays lean.

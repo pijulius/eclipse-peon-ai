@@ -21,6 +21,7 @@ Tool-Call und manchmal eine falsche Entscheidung.
 | **Peon-Plan** / **Da Thinka** | Plan-Agent; schreibt ausschließlich `peon-plan/overview.md`, berät verbal | Planner, Architekt |
 | **Peon-Dev** / **Da Mek** | Dev-Agent; schreibt ausschließlich Code | Developer, Coder, Sklave (nur informell) |
 | **Da Sniffa** | Such-Agent (`searchAgent`), read-only, zustandslos, einmalig | Research-Agent, Scout |
+| **Da Dok** | Review-Agent (`reviewPlanAgent`), dritter PO-RAM-Sklave (`Peon-Review`), read-only im Code, Verdict ACCEPTED/CONCERNS/REJECTED | Reviewer, QA-Agent, Peon-Review (nur als Agent-ID) |
 | **Da Scribe** | Compact-Agent (`compactSession`) | Compressor, Summarizer |
 | **Custom Agent** | Nutzerdefinierter Agent aus `AGENT.md` mit Frontmatter | User-Agent, eigener Agent |
 
@@ -76,6 +77,9 @@ entschieden · 🔒 geklärt.
 | **Falsch-Negativ** | Tool meldet „nicht gefunden", obwohl es existiert — der teuerste Tool-Fehler | leeres Ergebnis |
 | **Log-Auszug** (`LogExcerpt`) | Gefilterter und geklemmter Ausschnitt eines Logs samt Header, der gezeigt/gesamt benennt | Log-Snippet, Tail, Ausschnitt |
 | **Refresh-Ziel** | Der Container, der bei leerem Ergebnis synchronisiert wird — **nicht** dasselbe wie der Such-Scope | Refresh-Scope, Sync-Bereich |
+| **Config-Skills** | Skills aus dem geteilten Config-Dir (`~/.peon/skills`) — Basis, in jedem Projekt sichtbar | globale Skills, Basis-Skills |
+| **Projekt-Skills** | Skills aus `<Projekt>/.agents/skills` (Disk-Pfad) — nur bei gewähltem Projekt sichtbar, **Override** bei Namenskollision | lokale Skills, Project-Skills |
+| **Skill-Component** | Eine vom `SkillService` gehaltene Component mit **immer einem Pfad** (Config- oder Projekt-Skills-Dir); lädt Disover+Parse+Swap selbst — Service tauscht Projekt-Component als Instanz, kein `@Nullable` dir | Skill-Slot (alt), Skill-Dir, Skill-Root |
 
 ## Offen
 

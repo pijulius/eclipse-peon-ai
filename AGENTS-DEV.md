@@ -10,7 +10,15 @@ Hints for the dev phase, base rules `AGENTS.md`
   build via `homepage/build-docs.sh`. New page → update the sidebar/nav in
   `homepage/.vitepress/config.ts`. A user-facing page is added only once the feature ships
   (rule ✅) — never document unbuilt behaviour to users.
-  
+
+## Dependencies
+
+- External JARs land in `lib/` via `maven-dependency-plugin`; `MANIFEST.MF` `Bundle-ClassPath`,
+  `build.properties` `bin.includes` and `.classpath` must list the **same** JARs.
+- Whitelist only the needed groupIds via `includeGroupIds`. Platform-provided JARs (jakarta,
+  osgi, jna, asm, jetty, felix, …) must **not** be in `lib/` — they come from the target
+  platform.
+
 ## Build & test
 
 - Full build: `mvn clean verify` or `mvn clean install` at the repo root (`llmpeon-parent`) — an Eclipse refresh +
@@ -86,5 +94,10 @@ These bit us repeatedly in this repo — check them before reporting an incremen
 - `CompletableFuture.get()` on a future **you cancelled yourself** throws `CancellationException`
   **unwrapped**, not wrapped in `ExecutionException` — a catch on `ExecutionException` silently
   misses it (this hid the model-list race, see `docs/adr/0040-model-list-single-flight-secret-masking.md`).
-- More Eclipse-platform know-how lives in `skills/eclipse-dpe/SKILL.md` — read it before
-  guessing, and append new findings **at the end of the file** (do not split an existing bullet).
+- More Eclipse-platform know-how lives in the project skill `eclipse-dpe` (read it via skillRead
+  before guessing) — append new findings **at the end of the file** (do not split an existing bullet).
+- Skill-Evolution (experimentell): every skillRead result ends with a usefulness footer — **always
+  answer it in your report** (helpful? wrong/outdated/incomplete? obsolete?). If a skill you just
+  read is wrong or outdated and you can fix it in place, do it in the same turn (keep it short);
+  otherwise report the gap so Jon routes it. Skill changes follow `skill-evolution` (evidence
+  required, keep skills short).
