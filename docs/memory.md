@@ -1,37 +1,83 @@
-# Session-Stand (2026-09-09, Autonomie-Modus abgeschlossen)
+# Session-Stand (2026-09-11, Zyklus 6 compact-einmal ✅ gebaut + Branch-Konsolidierung · Merge auf main = User)
 
-## Git-Stand — story/133 (11 Commits ahead, Merge/Push = User)
+**Aktiver Zweig: `story/lib-update-2026-09-09`** — alle Zyklen drauf (31 Commits, Merge = User):
 
-- **Story A ✅** SkillComponent-Refactor: `23fbaa3` `024d151` `c19ecd7` `5eff54f` `3d6c2d5`.
-- **Story B ✅** Skills-Move: `8acff18` (Move+AGENTS+po.txt+Smoke-Skill) · `134a73d`
-  (Test-Fixture-Pfad auf PROJECT_SKILLS_DIR — einziger Hardcode, Smoke-Test-Fund).
-- **Story C ✅** Learning-Loop: R1-Java `b4e918d`+`be4093b` · Text-Seite `2bca2c2`
-  (AGENTS-PO.md neu, AGENTS-DEV.md ergänzt, R2–R7).
-- Früher heute: Header-Order `ec2d754` · Docs `d5ca69a` · Rename-Test-Fix `7f89af5`.
-- **Smoke-Test ✅:** skillNames zeigt eclipse-dpe/skill-evolution [project], R1-Footer live am
-  skillRead-Ergebnis, test_project-Smoke-Skill `test [project]` sichtbar. Core 699/0 ·
-  Plugin 194/0.
-- **Merge/Squash → main + Push = User-Entscheidung.**
+- **Zyklus 1 lib-update** (`fe761f8`…`8ae9c5f`): Target 2026-09, langchain4j 1.20.0/beta30
+  (MCP → Streamable-HTTP, Legacy-Server fallen weg), jakarta.annotation 3.0 — [ADR-0044](adr/0044-target-2026-09-dependency-update.md).
+- **Zyklus 2 warning-cleanup** (`51f43d2`…`7f7b9b3`): 64→12 Probleme, Rest-Ausnahmen in
+  AGENTS-DEV („Known-benign warnings").
+- **Zyklus 3 mcp-fixes** (`cec9ebf`…`eb12072`): R-MCP1 live-apply, R-MCP2 leer=Auto-Detect
+  ([mcp.md](mcp.md) + [ADR-0045](adr/0045-mcp-protocol-version-auto-detect.md)), R-MCP3 Combo.
+- **R-ML1** (`fcb5339`): Fetch-Identity zur Fetch-Zeit, live-Supplier statt Stale-Snapshot
+  ([model-loading.md](model-loading.md)).
+- **Zyklus 4 stop-fenster** (`ff69a3d`…`9c03f17`): R-ST1 In-Flight-Counter, R-ST2, R-ST3 —
+  [chat-job-lifecycle.md](chat-job-lifecycle.md).
+- **Zyklus 5 CI** (`29b1c06`…`5550d96`): `xvfb-run` in maven.yml ([pipeline.md](pipeline.md)).
+- **Zyklus 6 compact-einmal** (`1f2d0b0`+`ce3483d`): Compact-Result genau einmal — Marker
+  `(nothing preserved)`, Count-Test über ALLE Message-Typen, Button-Re-Render autoritativ
+  (Clear nur bei Erfolg) — [context-message-concept.md](context-message-concept.md).
 
-## Offene Punkte (für User-Zusammenfassung)
+**Branch-Konsolidierung (2026-09-11, User-Anordnung „alles auf einen Branch, Rest löschen" — ✅
+abgeschlossen):** Meine Diagnose „3 Fixes fehlen" war **falsch** — User hatte recht: Content kam
+via Squash `45f2a0d2` („Release 2026 09 06 #132", Ancestor von main UND story) → alle 3
+Cherry-Picks (`a1d8d35`/`27c09ad`/`11f34f6`) leer. **13 Branches gelöscht** (je einzeln gegen
+main-Squashes verifiziert, patch-/tree-identisch): fix-compact-issue · bug/110 ·
+release-2026-09-06 · story/133 · use-agentmd-static · in-editor-edits · story/81 · 2.7.0-fix ·
+new-config · fix-stadning-orders · better-slash-commands · agent-specific-md-file · scaffold-agent.
+**Verbleibende 9 (User: Rest löschen — Tip-SHAs hier zur Reflog-Wiederherstellung):**
+commands-and-custom-system `5eb3022` · fix-queued-messages `e69a468` · toc-estimate-2026-09-06
+`d8cdb7d` · state-config-2026-09-06 `f262648` · jon-askuser-2026-09-05 `4f3bd1e` ·
+encoding-and-links `eb15808` · bug-hunt-2026-09-04 `22d2e99` · streaming-timing-2026-09-05
+`f334e7f` · think-setting-on-agent `ccbfc24`. (Jon-askuser R17 + encoding/links Features sind
+laut Docs ✅ in main — Branch-Diffs sind Intermediate-Stände.)
 
-1. Merge story/133 → main + Push.
-2. Loop-Bewährung (C ist experimentell): erste Iterationen zeigen, ob Footer-Feedback +
-   CRUD-Evidence-Regel tragen — Wanderung in Built-in-Prompts später = User-Schritt.
-3. M2-cosmetic: „slot"-Namensdrift in alten Tests/Kommentaren (SkillServiceTest :209ff,
-   setProject_replacesProjectSlotOnly) — klein, wann immer berührt.
-4. Nächste Zyklen: Memory-Leak-Hunt (frischer Context) · Bug-Fix (Triage #5–#15 + ApiRetry +
-   AgentOrder-Edge) · ❓ Glossar eager · ❓ buildWithDev-Compact (open-points.md).
+## User-Handlungen offen
 
-## Geparkt / Wissenswert
+1. **Smoke-Tests auf Branch-Stand (Plugin-Restart nötig):** (a) MCP: leeres Protocol-Version-Feld
+   (Auto-Detect) oder `2025-11-25`, Config-Änderung ohne Restart; (b) R-ML1a: Base-URL ändern →
+   Refresh holt Liste über neue URL; (c) R-ST-Smokes 1–7 (Happy Turn · Stale-finally ·
+   Phantom-Job · Compress+sofort-Send · Abort/Idle-Stop · INFO-Zeilen); (d) Compact-Button:
+   **Summary 1×, Resume-Zeile 1×, Stop-Button danach idle?**
+2. **Merge/Squash** `story/lib-update-2026-09-09` → main — User-Entscheidung.
+3. **Homepage-Release-Notes** (User prüft): „Target Platform 2026-09, langchain4j 1.20.0, MCP
+   über Streamable HTTP (Legacy-HTTP/SSE-Server fallen weg), jakarta.annotation 3.0, Lib-Updates;
+   MCP-Fix: leer = Auto-Detect + Config-Änderungen greifen sofort" + Story/133-Skills-Zeile,
+   falls unveröffentlicht.
 
-- E2E-Tool-Namens-Falle: `diskRenameResource`/`eclipseRenameResource`.
-- copy-tools-e2e-test.md `diskRenameResource`-Korrektur — kosmetisch, steht aus.
-- ⏳ Query-Caches · ⏳ Streaming-Präzisierungen · ⏳ Edit-Tools (open-points.md).
-- Leere Test-Fixture-Dirs überleben Cleanup — bewusst kein Sweep (git-unsichtbar).
-- git mv auf macOS braucht mkdir -p des Ziels zuerst (Apple Git 2.50).
-- Review-Agent Bewährung: F1+F2 (story/133) + Story-C-Review sauber; Fixtures mit static
-  @BeforeAll-tmp nicht zweimal nutzen (FileAlreadyExists — fixture-shape ok, Name variieren).
-- Story-B-Lektion: Repo-interne Pfad-Referenzen (Tests!) beim Move mit-greppen — Hardcode
-  `resolve("skills")` überlebte den Move bis zum Smoke-Test.
+## Offener Verdacht (wartet auf User-Smoke auf Branch-Stand)
 
+**Stop-Button bleibt nach Compact aktiv** — Kandidat: `onCommitUi` (Clear+Re-Render) läuft VOR
+`lockWhileWorking(false)` (AIChatView.java:615→617); wirft es (Browser-Hang!), bleibt der Unlock
+aus. Nur der Compact-Pfad (Chat-Turn hat `onCommitUi = null`, :596). Reproduziert es sich auf
+Branch-Stand → Fix: try/catch um `onCommitUi` + garantiertes Unlock (fail-open, R-ST1-Linie 613
+„UI must never stay stuck"). SOLL dann in [chat-job-lifecycle.md](chat-job-lifecycle.md).
+**User-Smoke 2026-09-11 (Alt-Stand, ohne Branch-Fixes):** Stop → llama.cpp zeigt
+stop/processing/cancel (Provider-Seite cancelt), UI läuft danach nicht weiter; erneutes Triggern,
+dann klappt Stop in der Alt-Version. Gilt nur für Alt-Stand — auf Branch-Stand (R-ST1) neu testen.
+**Da Mek 2026-09-11 vom ApiRetry-Bug getötet** („AI call canceled while waiting to retry", mitten
+in der Branch-Konsolidierung) — erneute Evidence für open-points ApiRetry-Ticket.
+
+## Danach (Reihenfolge offen)
+
+1. Bug-Fix-Zyklus: Memory-Leak-Hunt (frischer Context!) · Triage #5–#15 + ApiRetry (mit neuer
+   Evidence) + AgentOrder-Edge + Fixture-Bug `PeonAiServiceTest.java:1444/1501` ·
+   Compact-Komplex verifiziert ([open-to-discuss.md](open-to-discuss.md)): 1 compactSession =
+   1 Compressor-Call; Kandidaten: COMPACT_HINT-Dedup · ApiRetry non-retryable · stille
+   Cancellation (`AIChatView.java:624`) · Browser-Hang Chat-View. **Doppel-Ablage gefixt
+   (`1f2d0b0`/`ce3483d`)** — Compact-Tool-Result = preserve only + Count==1.
+2. Loop-Bewährung → Built-in-Prompts (User-Schritt, später).
+3. ❓ Glossar eager · ❓ buildWithDev-Compact · ❓ Glossar „Slot" doppelt · ⏳ Jackson 2→3
+   (open-points.md — beobachten, Migration erst wenn Jackson 2 komplett entfernbar, User 2026-09-10).
+
+## Referenz
+
+- Story/133 gemerged (Squash `e55668b`). Release-Notes: Skills `.agents/skills` + CRUD-Loop +
+  Usefulness-Footer; Scaffold-Write refresht Skills; Jon liest Skills.
+- Bug-Triage lib-update: MCP duckduckgo `-32022` gelöst · Model-List-URL-Lockdown gelöst
+  (R-ML1) · Stop-Fenster gelöst ([chat-job-lifecycle.md](chat-job-lifecycle.md)) ·
+  Bug-Kandidat `eclipseGrepFiles` mit Pfad `/docs` False-Negative (Workaround: Projekt+Extension).
+- compactSession bricht bei zu langem State (>150k) ohne klare Fehlermeldung ab — Backlog
+  (open-to-discuss „Status-Display nach compactSession").
+- Geparkt: Query-Caches, Streaming-Präzisierungen, Edit-Tools, copy-tools-e2e-`diskRenameResource`,
+  Dropdown-Umbau (Klassen gelöscht, Git-Historie).
+- 🔒 IDE-Target-rot → behoben durch Eclipse-Neuinstallation (resolved-points.md).
