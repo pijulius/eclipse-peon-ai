@@ -1,5 +1,6 @@
 package org.sterl.llmpeon.ai;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -8,6 +9,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.sterl.llmpeon.StreamMock;
 import org.sterl.llmpeon.agent.AiCompressorAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.mock.MockLlmServer;
@@ -15,8 +17,10 @@ import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.tool.ToolService;
 
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 
 /**
  * https://github.com/langchain4j/langchain4j/blob/main/docs/docs/tutorials/agents.md
@@ -66,6 +70,27 @@ class AiCompressorAgentTest {
 
         // AND
         assertTrue(subject.getMemory().size() <= 2, "Chat messages aren't reduced! Still " + subject.getMemory().size());
+    }
+
+    @Test
+    void test_sendsSystemPromptToLlm() {
+        // GIVEN — StreamMock returns a compressed briefing; the prompt text comes from
+        // compressor.txt, so a plain default LlmConfig is enough
+        var streamMock = new StreamMock();
+        var cm = streamMock.buildMock(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("WHAT: Test summary"))
+                .build());
+        var config = LlmConfig.builder().model("test").build();
+        var subject = new AiCompressorAgent(new ConfiguredChatModel(config, cm));
+
+        // WHEN
+        subject.call(List.of(UserMessage.from("Foo"), AiMessage.from("Bar")), AiMonitor.NULL_MONITOR);
+
+        // THEN — the request carries the COMPRESS_SYSTEM system message from compressor.txt
+        assertThat(streamMock.getLastRequest()).isNotNull();
+        var system = streamMock.getLast(SystemMessage.class).orElseThrow();
+        assertThat(system.text()).isNotBlank();
+        assertThat(system.text()).contains("WHAT:");
     }
 
     @Test
