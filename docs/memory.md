@@ -1,88 +1,61 @@
-# Session-Stand (2026-09-11, Zyklus 6 compact-einmal ✅ gebaut + Branch-Konsolidierung · Merge auf main = User)
+# Session-Stand (2026-09-11, Nachmittag — alles auf main gemerged, Zyklen abgeschlossen)
 
-**Aktiver Zweig: `story/lib-update-2026-09-09`** — alle Zyklen drauf (31 Commits, Merge = User):
+**Aktiver Zweig: main** — User hat `story/lib-update-2026-09-09` (34 Commits) gemergt und das
+Eclipse-Update gezogen. Branch-Konsolidierung abgeschlossen: nur noch main (+ Story-Branch
+historisch). **Alle Smoke-Test-Befunde aus den letzten Zyklen zählen jetzt auf main-Stand.**
 
-- **Zyklus 1 lib-update** (`fe761f8`…`8ae9c5f`): Target 2026-09, langchain4j 1.20.0/beta30
-  (MCP → Streamable-HTTP, Legacy-Server fallen weg), jakarta.annotation 3.0 — [ADR-0044](adr/0044-target-2026-09-dependency-update.md).
-- **Zyklus 2 warning-cleanup** (`51f43d2`…`7f7b9b3`): 64→12 Probleme, Rest-Ausnahmen in
-  AGENTS-DEV („Known-benign warnings").
-- **Zyklus 3 mcp-fixes** (`cec9ebf`…`eb12072`): R-MCP1 live-apply, R-MCP2 leer=Auto-Detect
-  ([mcp.md](mcp.md) + [ADR-0045](adr/0045-mcp-protocol-version-auto-detect.md)), R-MCP3 Combo.
-- **R-ML1** (`fcb5339`): Fetch-Identity zur Fetch-Zeit, live-Supplier statt Stale-Snapshot
-  ([model-loading.md](model-loading.md)).
-- **Zyklus 4 stop-fenster** (`ff69a3d`…`9c03f17`): R-ST1 In-Flight-Counter, R-ST2, R-ST3 —
-  [chat-job-lifecycle.md](chat-job-lifecycle.md).
-- **Zyklus 5 CI** (`29b1c06`…`5550d96`): `xvfb-run` in maven.yml ([pipeline.md](pipeline.md)).
-- **Zyklus 6 compact-einmal** (`1f2d0b0`+`ce3483d`+`a89cdc6`): Compact-Result genau einmal —
-  Marker `(nothing preserved)`, Count-Test über ALLE Message-Typen, Button-Re-Render autoritativ
-  (Clear nur bei Erfolg) — [context-message-concept.md](context-message-concept.md). **R-ST4:**
-  System-Message-Rebuild nach In-Loop-Compact (executeLoop Compact-Zweig, non-default
-  `AiAgent.buildStaticMessages`) — Rest-Turn nicht mehr mit Stale-Prompt/Plan-Snapshot;
-  Rot-Test `test_inLoopCompact_systemMessageIsRebuilt`.
+## Abgeschlossene Zyklen (Referenz)
 
-**Branch-Konsolidierung (2026-09-11, User-Anordnung „alles auf einen Branch, Rest löschen" — ✅
-abgeschlossen):** Meine Diagnose „3 Fixes fehlen" war **falsch** — User hatte recht: Content kam
-via Squash `45f2a0d2` („Release 2026 09 06 #132", Ancestor von main UND story) → alle 3
-Cherry-Picks (`a1d8d35`/`27c09ad`/`11f34f6`) leer. **13 Branches gelöscht** (je einzeln gegen
-main-Squashes verifiziert, patch-/tree-identisch): fix-compact-issue · bug/110 ·
-release-2026-09-06 · story/133 · use-agentmd-static · in-editor-edits · story/81 · 2.7.0-fix ·
-new-config · fix-stadning-orders · better-slash-commands · agent-specific-md-file · scaffold-agent.
-**Verbleibende 9 (User: Rest löschen — Tip-SHAs hier zur Reflog-Wiederherstellung):**
-commands-and-custom-system `5eb3022` · fix-queued-messages `e69a468` · toc-estimate-2026-09-06
-`d8cdb7d` · state-config-2026-09-06 `f262648` · jon-askuser-2026-09-05 `4f3bd1e` ·
-encoding-and-links `eb15808` · bug-hunt-2026-09-04 `22d2e99` · streaming-timing-2026-09-05
-`f334e7f` · think-setting-on-agent `ccbfc24`. (Jon-askuser R17 + encoding/links Features sind
-laut Docs ✅ in main — Branch-Diffs sind Intermediate-Stände.) **→ alle 9 gelöscht; Branch-Liste
-= main + story/lib-update-2026-09-09, Head `1027af9`** (Docs `b306974` · Compressor-user-change
-`1027af9` — Compact-Input-Dedup + lineSeparator + Truncation 3000, User-Eigentum, freigegeben).
+- **lib-update** · warning-cleanup · mcp-fixes (R-MCP1–3, ADR-0045) · R-ML1 · stop-fenster
+  (R-ST1–3, chat-job-lifecycle.md) · CI xvfb (pipeline.md) — alle ✅.
+- **Compact-Zyklus** (`1f2d0b0`/`ce3483d`/`a89cdc6`, context-message-concept.md): Compact-Result
+  genau einmal (Marker `(nothing preserved)`, Count-Test über ALLE Message-Typen, Button-Re-Render
+  autoritativ) + **R-ST4** System-Message-Rebuild nach In-Loop-Compact (executeLoop Compact-Zweig,
+  non-default `AiAgent.buildStaticMessages`, Rot-Test `test_inLoopCompact_systemMessageIsRebuilt`).
+- **Compressor-Prompt-Test** (`7105e3b`, main): `test_sendsSystemPromptToLlm` — Lücke geschlossen
+  (kein Test prüfte, dass der Request die COMPRESS_SYSTEM-Message trägt); 704/0.
+
+## Branch-Konsolidierung (2026-09-11, abgeschlossen)
+
+Meine „3 Fixes fehlen"-Diagnose war falsch — Content kam via Squash `45f2a0d2` („Release 2026 09
+06 #132"). 22 Branches gelöscht (13 nachweislich gemergt + 9 per User-Anordnung). Tips stehen
+hier bis zum nächsten Aufräumen — **jetzt überholt, Branches existieren nicht mehr.**
 
 ## User-Handlungen offen
 
-1. **Smoke-Tests auf Branch-Stand (Plugin-Restart nötig):** (a) MCP: leeres Protocol-Version-Feld
-   (Auto-Detect) oder `2025-11-25`, Config-Änderung ohne Restart; (b) R-ML1a: Base-URL ändern →
-   Refresh holt Liste über neue URL; (c) R-ST-Smokes 1–7 (Happy Turn · Stale-finally ·
-   Phantom-Job · Compress+sofort-Send · Abort/Idle-Stop · INFO-Zeilen); (d) Compact-Button:
-   **Summary 1×, Resume-Zeile 1×, Stop-Button danach idle?**
-2. **Merge/Squash** `story/lib-update-2026-09-09` → main — User-Entscheidung.
-3. **Homepage-Release-Notes** (User prüft): „Target Platform 2026-09, langchain4j 1.20.0, MCP
-   über Streamable HTTP (Legacy-HTTP/SSE-Server fallen weg), jakarta.annotation 3.0, Lib-Updates;
-   MCP-Fix: leer = Auto-Detect + Config-Änderungen greifen sofort" + Story/133-Skills-Zeile,
-   falls unveröffentlicht.
+1. **Smoke-Tests auf main-Stand** (alle Zyklen): (a) MCP leeres Protocol-Feld / Config ohne
+   Restart; (b) R-ML1a Base-URL-Refresh; (c) R-ST-Smokes 1–7; (d) Compact-Button: Summary 1×,
+   Resume-Zeile 1×, Stop-Button danach idle; (e) In-Loop-Compact („rufe das compact tool auf"):
+   nach dem Compact-Result frischer System-Prompt im Rest-Turn (R-ST4 — neue `Loading 📋`-Zeilen
+   mid-Turn sind erwartbar).
+2. **Homepage-Release-Notes** prüfen (User).
 
-## Offener Verdacht (wartet auf User-Smoke auf Branch-Stand)
+## Offener Verdacht (wartet auf User-Smoke auf main)
 
 **Stop-Button bleibt nach Compact aktiv** — Kandidat: `onCommitUi` (Clear+Re-Render) läuft VOR
 `lockWhileWorking(false)` (AIChatView.java:615→617); wirft es (Browser-Hang!), bleibt der Unlock
 aus. Nur der Compact-Pfad (Chat-Turn hat `onCommitUi = null`, :596). Reproduziert es sich auf
-Branch-Stand → Fix: try/catch um `onCommitUi` + garantiertes Unlock (fail-open, R-ST1-Linie 613
-„UI must never stay stuck"). SOLL dann in [chat-job-lifecycle.md](chat-job-lifecycle.md).
-**User-Smoke 2026-09-11 (Alt-Stand, ohne Branch-Fixes):** Stop → llama.cpp zeigt
-stop/processing/cancel (Provider-Seite cancelt), UI läuft danach nicht weiter; erneutes Triggern,
-dann klappt Stop in der Alt-Version. Gilt nur für Alt-Stand — auf Branch-Stand (R-ST1) neu testen.
-**Da Mek 2026-09-11 vom ApiRetry-Bug getötet** („AI call canceled while waiting to retry", mitten
-in der Branch-Konsolidierung) — erneute Evidence für open-points ApiRetry-Ticket.
+main-Stand (R-ST1 ist drin!) → Fix: try/catch um `onCommitUi` + garantiertes Unlock (fail-open,
+R-ST1-Linie 613 „UI must never stay stuck"). SOLL dann in chat-job-lifecycle.md.
+Alt-Stand-Beobachtung (2026-09-11): Stop → llama.cpp stop/processing/cancel, UI läuft nicht
+weiter; Re-Trigger hilft. Gilt für Alt-Stand — auf main neu testen.
 
 ## Danach (Reihenfolge offen)
 
-1. Bug-Fix-Zyklus: Memory-Leak-Hunt (frischer Context!) · Triage #5–#15 + ApiRetry (mit neuer
-   Evidence) + AgentOrder-Edge + Fixture-Bug `PeonAiServiceTest.java:1444/1501` ·
-   Compact-Komplex verifiziert ([open-to-discuss.md](open-to-discuss.md)): 1 compactSession =
-   1 Compressor-Call; Kandidaten: COMPACT_HINT-Dedup · ApiRetry non-retryable · stille
-   Cancellation (`AIChatView.java:624`) · Browser-Hang Chat-View. **Doppel-Ablage gefixt
-   (`1f2d0b0`/`ce3483d`)** — Compact-Tool-Result = preserve only + Count==1.
+1. Bug-Fix-Zyklus: Memory-Leak-Hunt (frischer Context!) · Triage #5–#15 · **ApiRetry** (Da Mek
+   2026-09-11 daran gestorben: „AI call canceled while waiting to retry" — 3. Evidence,
+   non-retryable-Klassifikation priorisieren) + AgentOrder-Edge + Fixture-Bug
+   `PeonAiServiceTest.java:1444/1501` · COMPACT_HINT-Dedup (Hint bleibt nach Compact in Memory,
+   §9.1 issues/overview-fixed-compact-issue.md) · stille Cancellation (`AIChatView.java:624`) ·
+   Browser-Hang Chat-View · compactSession >150k ohne klare Fehlermeldung (open-to-discuss).
 2. Loop-Bewährung → Built-in-Prompts (User-Schritt, später).
 3. ❓ Glossar eager · ❓ buildWithDev-Compact · ❓ Glossar „Slot" doppelt · ⏳ Jackson 2→3
-   (open-points.md — beobachten, Migration erst wenn Jackson 2 komplett entfernbar, User 2026-09-10).
+   (open-points.md — beobachten).
 
 ## Referenz
 
-- Story/133 gemerged (Squash `e55668b`). Release-Notes: Skills `.agents/skills` + CRUD-Loop +
-  Usefulness-Footer; Scaffold-Write refresht Skills; Jon liest Skills.
-- Bug-Triage lib-update: MCP duckduckgo `-32022` gelöst · Model-List-URL-Lockdown gelöst
-  (R-ML1) · Stop-Fenster gelöst ([chat-job-lifecycle.md](chat-job-lifecycle.md)) ·
-  Bug-Kandidat `eclipseGrepFiles` mit Pfad `/docs` False-Negative (Workaround: Projekt+Extension).
-- compactSession bricht bei zu langem State (>150k) ohne klare Fehlermeldung ab — Backlog
-  (open-to-discuss „Status-Display nach compactSession").
-- Geparkt: Query-Caches, Streaming-Präzisierungen, Edit-Tools, copy-tools-e2e-`diskRenameResource`,
-  Dropdown-Umbau (Klassen gelöscht, Git-Historie).
+- Bug-Triage: MCP `-32022` gelöst · Model-List-URL-Lockdown gelöst · Stop-Fenster gelöst ·
+  Bug-Kandidat `eclipseGrepFiles` Pfad `/docs` False-Negative (Workaround: Projekt+Extension).
+- Story/133 gemerged (Squash `e55668b`): Skills `.agents/skills` + CRUD-Loop + Usefulness-Footer.
+- Geparkt: Query-Caches, Streaming-Präzisierungen, Edit-Tools, copy-tools-e2e-`diskRenameResource`.
 - 🔒 IDE-Target-rot → behoben durch Eclipse-Neuinstallation (resolved-points.md).
