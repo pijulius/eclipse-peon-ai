@@ -1,4 +1,4 @@
-## Stale System-Message im Compact-Turn (SOLL 2026-09-11, R-ST4) — ❌ specified
+## Stale System-Message im Compact-Turn (SOLL 2026-09-11, R-ST4) — ✅ done (`a89cdc6`)
 
 Auslöser: User-Smoke-Test 1 („rufe das compact tool auf") — nach dem Compact lief der Turn
 weiter und der Compact-Briefing wurde verständlich fortgesetzt. User-Erkenntnis: „nach dem

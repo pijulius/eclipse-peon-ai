@@ -13,9 +13,12 @@
 - **Zyklus 4 stop-fenster** (`ff69a3d`…`9c03f17`): R-ST1 In-Flight-Counter, R-ST2, R-ST3 —
   [chat-job-lifecycle.md](chat-job-lifecycle.md).
 - **Zyklus 5 CI** (`29b1c06`…`5550d96`): `xvfb-run` in maven.yml ([pipeline.md](pipeline.md)).
-- **Zyklus 6 compact-einmal** (`1f2d0b0`+`ce3483d`): Compact-Result genau einmal — Marker
-  `(nothing preserved)`, Count-Test über ALLE Message-Typen, Button-Re-Render autoritativ
-  (Clear nur bei Erfolg) — [context-message-concept.md](context-message-concept.md).
+- **Zyklus 6 compact-einmal** (`1f2d0b0`+`ce3483d`+`a89cdc6`): Compact-Result genau einmal —
+  Marker `(nothing preserved)`, Count-Test über ALLE Message-Typen, Button-Re-Render autoritativ
+  (Clear nur bei Erfolg) — [context-message-concept.md](context-message-concept.md). **R-ST4:**
+  System-Message-Rebuild nach In-Loop-Compact (executeLoop Compact-Zweig, non-default
+  `AiAgent.buildStaticMessages`) — Rest-Turn nicht mehr mit Stale-Prompt/Plan-Snapshot;
+  Rot-Test `test_inLoopCompact_systemMessageIsRebuilt`.
 
 **Branch-Konsolidierung (2026-09-11, User-Anordnung „alles auf einen Branch, Rest löschen" — ✅
 abgeschlossen):** Meine Diagnose „3 Fixes fehlen" war **falsch** — User hatte recht: Content kam
@@ -29,7 +32,9 @@ commands-and-custom-system `5eb3022` · fix-queued-messages `e69a468` · toc-est
 `d8cdb7d` · state-config-2026-09-06 `f262648` · jon-askuser-2026-09-05 `4f3bd1e` ·
 encoding-and-links `eb15808` · bug-hunt-2026-09-04 `22d2e99` · streaming-timing-2026-09-05
 `f334e7f` · think-setting-on-agent `ccbfc24`. (Jon-askuser R17 + encoding/links Features sind
-laut Docs ✅ in main — Branch-Diffs sind Intermediate-Stände.)
+laut Docs ✅ in main — Branch-Diffs sind Intermediate-Stände.) **→ alle 9 gelöscht; Branch-Liste
+= main + story/lib-update-2026-09-09, Head `1027af9`** (Docs `b306974` · Compressor-user-change
+`1027af9` — Compact-Input-Dedup + lineSeparator + Truncation 3000, User-Eigentum, freigegeben).
 
 ## User-Handlungen offen
 
