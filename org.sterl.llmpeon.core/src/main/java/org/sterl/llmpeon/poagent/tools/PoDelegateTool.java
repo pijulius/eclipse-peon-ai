@@ -242,7 +242,7 @@ public class PoDelegateTool extends AbstractTool {
             onTool(stats);
             return StringUtil.hasValue(answer)
                     ? answer + System.lineSeparator() + stats
-                    : target.uiName() + " returned no result";
+                    : target.uiName() + " returned no result " + stats;
         } catch (IllegalStateException e) {
             onProblem(target.uiName() + " " + e.getMessage());
             return "Failed: " + target.uiName() + e.getMessage();

@@ -592,10 +592,9 @@ public class AIChatView implements EclipseAiMonitor {
 
     private void handleDoneChatResponse(String agentName,
             @Nullable ChatResponse cr, IProgressMonitor monitor, Exception ex) {
-        // TODO enable me again
-        //if (aiService.getConfig().isDebugMode()) {
+        if (aiService.getConfig().isDebugMode()) {
             LOG.info("Chatreponse for " + agentName + ": " + (cr == null ? "null" : cr.aiMessage()));
-        //}
+        }
         monitor.done();
         // R-ST1: the commit decision lives INSIDE the UI runnable — UI-thread-serialized with
         // the submits. A stale finally (newer run in flight) must touch neither monitorRef

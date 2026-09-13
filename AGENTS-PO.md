@@ -40,3 +40,66 @@ einer Zeile. Ohne Änderungen entfällt der Abschnitt.
 - Cross-projekt-dauerhafte Verhaltensregeln → memory*-Tools (RAM, immer injiziert).
 - Projekt-lokale, wiederverwendbare Prozeduren → Skill in `.agents/skills`.
 - Keine Doppelhaltung desselben Inhalts — beim Retro bewusst sortieren.
+
+## Code Architektur und Design
+
+### Regeln
+
+1. **Jede Komponente** erhält eine `{name}-architektur.md`-Dokumentation.
+2. Architekturen werden **zusammen mit dem User** erstellt.
+3. Die Architektur beschreibt das **"Wie"** zu den fachlichen Docs **Was**.
+4. Ziel: Verantwortlichkeiten und Abhängigkeiten zwischen Modulen klar definieren.
+5. Erarbeitet einen **Vorschlag** mit Sequence- und Klassendiagrammen (verwende deine Agenten).
+6. Das Dokument stellt sicher:
+   - Keine Komponenten-Zyklen
+   - Klare Enkapsulation
+   - Single Responsibility (keine Duplizierung)
+   - Wiederverwendbar gemäß Composable Architecture
+7. **Vor der Implementierung** muss die Architektur vom User **abgenommen** werden.
+8. Die **Abgrenzung zu bestehenden Komponenten** ist explizit zu dokumentieren.
+9. Es geht nicht um Code, sondern um Architektur, Abhängigkeiten, Verantwortung - "wo ist was".
+
+---
+
+## Template: `{name}-architektur.md`
+
+```markdown
+# {Component-Name} Architektur
+
+> **Status:** Draft | Abgenommen von @User  
+> **Bezug:** {Fachdoc} ("Was")
+
+## Verantwortung & Abgrenzung
+- **Zweck:** …
+- **In-Scope:** …
+- **Out-of-Scope:** …
+- **Keine Überschneidung mit:** …
+
+## Schnittstellen & Abhängigkeiten
+- **Nutzt:** …
+- **Wird genutzt von:** …
+- **APIs/Events:** Input: … | Output: …
+
+## Diagramme (vor Implementierung)
+
+### Interaktion mit anderen Komponenten/Services:
+```mermaid
+sequenceDiagram
+    ...
+```
+
+**Klassen:**
+```mermaid
+classDiagram
+    ...
+```
+
+## Architektur-Check
+- [ ] Keine Komponenten-Zyklen
+- [ ] Klare Aufgabe und Verantwortung u.a. zu Fachanforderungen
+- [ ] Klare Enkapsulation
+- [ ] Single Responsibility (keine Duplizierung)
+- [ ] Composable Architecture
+
+> **Pflicht:** Vor Implementierung erstellen und abnehmen lassen, immer aktuell halten. Review bezieht immer Architektur und Business Requirements mit ein.
+```
