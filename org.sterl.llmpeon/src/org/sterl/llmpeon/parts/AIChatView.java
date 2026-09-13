@@ -495,8 +495,6 @@ public class AIChatView implements EclipseAiMonitor {
             } catch (Exception e) {
                 ex = handleChatException(e);
             } finally {
-                // cr is reassigned in the try (not effectively final) — capture the success flag
-                // here so the UI runnable can branch on it (only a real success clears + re-renders).
                 handleDoneChatResponse(active.getName(), null, monitor, ex);
             }
             return PeonConstants.status("Compacted " + active.getName(), ex);

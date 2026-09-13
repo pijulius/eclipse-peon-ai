@@ -15,7 +15,6 @@ import org.sterl.llmpeon.agent.AiCompressorAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
 import org.sterl.llmpeon.mock.MockLlmServer;
 import org.sterl.llmpeon.shared.AiMonitor;
-import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.model.SimpleMessage;
 

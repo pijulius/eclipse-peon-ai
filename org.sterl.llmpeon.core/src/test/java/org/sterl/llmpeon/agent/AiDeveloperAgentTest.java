@@ -218,7 +218,7 @@ public class AiDeveloperAgentTest {
         var first = new AtomicBoolean(true);
         fn.set(req -> {
             req.messages().stream()
-                    .filter(m -> m instanceof SystemMessage sm)
+                    .filter(m -> m instanceof SystemMessage)
                     .forEach(m -> systemTexts.add(((SystemMessage) m).text()));
             if (first.getAndSet(false)) {
                 return ChatResponse.builder()
