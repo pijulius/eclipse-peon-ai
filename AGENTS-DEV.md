@@ -62,10 +62,11 @@ Hints for the dev phase, base rules `AGENTS.md`
 - **Known-benign warnings — do NOT re-triage every cycle** (2026-09-10, warning-cleanup cycle:
   64 → 12 problems, commits `51f43d2`/`a9124f1`/`56e9cc5`). The remaining 12 are accepted
   exceptions; fix real new ones, keep this list current:
-  - Plugin ×10 null-type-safety on method refs (`AIChatView:162-163`, `PeonAiService:401-402,489`,
-    `ModelComboWidget:122`, `EclipseUtil:318`, `EclipseWorkspaceReadFileTool:155`,
-    `AiAgentStatusModel:48`, `StatusLineWidget:188`) — method refs to `@NonNull`-parameter
-    functional interfaces; internal callers never pass null.
+  - Plugin ×9 null-type-safety on method refs (`AIChatView:164-165`, `PeonAiService:401-402,489`,
+    `ModelComboWidget:128`, `EclipseUtil:318`, `EclipseWorkspaceReadFileTool:155`,
+    `StatusLineWidget:188`) — method refs to `@NonNull`-parameter functional interfaces; internal
+    callers never pass null. (2026-09-12: `AiAgentStatusModel:48` moved with the agent-status
+    module into core — now part of the core IDE-scope warnings above.)
   - Plugin ×1 `resources/` class-folder (`.classpath` mirrors `Bundle-ClassPath`) — **must stay**:
     `ChatMarkdownWidget` loads `chat.html` via classloader AND OSGi `FileLocator`; dropping the
     entry risks breaking the chat view at IDE runtime.
@@ -104,6 +105,18 @@ These bit us repeatedly in this repo — check them before reporting an incremen
   2b-2 the dev shipped three extra, factually correct fixes in a file the plan had marked TABU;
   the fixes were fine, the surprise was not. Since then every plan carries a TABU list and this
   rule.)
+- **Stub/mocked-LLM tests must assert BOTH directions: what is SENT and what is RECEIVED.**
+  Assert the captured request payload (the actual built messages/parameters), not just that a
+  call happened — whenever the send path contains logic (dedup, filtering, truncation,
+  mapping), that logic IS the feature under test. (Origin 2026-09-11: `AiCompressorAgent` dedup
+  was inverted → compact input always empty; both existing tests asserted only the system
+  prompt / the response side and stayed green for the broken send path.)
+
+- **„Green before the change" declarations only for tests that can actually run against the
+  pre-change state.** A new test coupled to the NEW type (e.g. asserts `instanceof Combo` where
+  the old code had `CCombo`) is swap-falsifiable by construction and is declared as such — never
+  as a regression guard that „was green before". (Origin 2026-09-12, config-cycle-2: all 3
+  R-A4 tests were red before the swap; the plan had declared 2 of them „green before and after".)
 
 ## Repo-specific API traps (verified, don't re-derive)
 
@@ -121,6 +134,11 @@ These bit us repeatedly in this repo — check them before reporting an incremen
 - `CompletableFuture.get()` on a future **you cancelled yourself** throws `CancellationException`
   **unwrapped**, not wrapped in `ExecutionException` — a catch on `ExecutionException` silently
   misses it (this hid the model-list race, see `docs/adr/0040-model-list-single-flight-secret-masking.md`).
+- SWT `GridLayout` honors only `GridData.exclude` — `setVisible(false)` alone does NOT remove the
+  control's grid row (the layout still reserves its slot). Hide-then-show pattern: initial
+  `exclude=true` + `setVisible(false)`; on show `exclude=false` + `setVisible(true)` +
+  `parent.layout()`. (Origin 2026-09-12, ui-config cycle: the plan's `setVisible(false)`-only fix
+  would have left the empty label row standing — caught by the dev's SWT-source check.)
 - More Eclipse-platform know-how lives in the project skill `eclipse-dpe` (read it via skillRead
   before guessing) — append new findings **at the end of the file** (do not split an existing bullet).
 - Skill-Evolution (experimentell): every skillRead result ends with a usefulness footer — **always

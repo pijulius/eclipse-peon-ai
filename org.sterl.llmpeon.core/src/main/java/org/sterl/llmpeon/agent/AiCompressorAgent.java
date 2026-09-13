@@ -1,5 +1,6 @@
 package org.sterl.llmpeon.agent;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 
 import org.sterl.llmpeon.ai.AgentModelConfig;
@@ -33,23 +34,24 @@ public class AiCompressorAgent {
      */
     public ChatResponse call(List<ChatMessage> messages, AiMonitor monitor) {
         monitor = AiMonitor.nullSafety(monitor);
-        var msg = new StringBuilder();
+        var stringMessages = new LinkedHashSet<String>();
         for (var m : messages) {
-            var txt = toText(m);
-            // avoid any duplications in the compact message
-            if (msg.indexOf(txt) < 0) {
-                msg.append(txt).append(System.lineSeparator()).append(System.lineSeparator());
-            }
+            var msg = toText(m);
+            if (msg.length() > 0) stringMessages.add(msg);
         }
 
         var cfg = chatModel.getConfig();
         var modelName = cfg.modelConfigFor(AgentModelConfig.COMPACT).model();
-        monitor.onTool("Compressing conversation " + messages.size()
-            + " messages" + (modelName == null ? "" : " using " + modelName));
+        monitor.onTool("Compressing conversation " 
+            + messages.size() + " messages "
+            + ChatMessageUtil.estimateTokens(messages) + " tokens"
+            + (modelName == null ? "" : " using " + modelName)
+        );
 
         // Model, temperature and think come from the compact ModelConfig (no tools for compaction).
         var request = ChatRequest.builder()
-                .messages(COMPRESS_SYSTEM, UserMessage.from(msg.toString()))
+                .messages(COMPRESS_SYSTEM, UserMessage.from(
+                        String.join(System.lineSeparator(), stringMessages)))
                 .parameters(cfg.compactAgentConfig().newRequestParameters(null));
 
         monitor.onChatMessage(1, request);
@@ -64,8 +66,8 @@ public class AiCompressorAgent {
 
     String toText(ChatMessage msg) {
         var result = new StringBuilder();
-        result.append(System.lineSeparator()).append(msg.type()).append(":\n");
-        result.append(ChatMessageUtil.toString(msg, false, 3000));
+        result.append(msg.type()).append(":").append(System.lineSeparator());
+        result.append(ChatMessageUtil.toString(msg, false, 4000));
         return result.toString();
     }
 }

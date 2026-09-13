@@ -1,8 +1,6 @@
 # Open Points
 
 Status je Punkt: ❓ offen · ⏳ selbst entschieden (Rückversicherung mit User steht aus) · 🔒 geklärt.
-Geklärte Punkte ohne Feature-Doc: [resolved-points.md](resolved-points.md).
-
 ## ❓ ApiRetry: Cancellation-Evidenz-Sammlung (Priorität: hoch, 3. Evidence 2026-09-11)
 
 **Befund-Klassen (alle derselbe Shape: Call bricht, statt dass ApiRetry sichtbar retryt):**
@@ -38,7 +36,10 @@ Plan-/Review-Agent sollen ggf. `git`/`mvn`/`npm` nutzen — heute ohne Shell-Too
 ShellTool, reduziert, oder Whitelist-Capability im ShellTool selbst (analog Write-Validator):
 Pattern-Liste per Agent konfigurierbar. **Status: nur Ticket** — „erst fertig werden, dann was
 Neues." Offene Fragen: Whitelist pro Agent oder global? Default-Set? Read-only-Filter (push?)?
-Verwandt: ADR-0015 (sandbox), ADR-0022 (Write-Path-Allowlist, Proposed).
+Verwandt: ADR-0015 (sandbox), ADR-0022 (Write-Path-Allowlist, Proposed). **Evidence 2026-09-13
+(User: „sollte er haben"):** Da Dok konnte im Release-Scan die User-Compact-Commits nicht
+isolieren (kein Git) — Review-Material musste erst Da Mek aufbereiten. Konkreter Use-Case für
+read-only Git beim Review-Agent.
 
 ## ⏳ Jackson 2 → 3: beobachten, Migration erst bei voller Entfernbarkeit (User 2026-09-10)
 
@@ -49,20 +50,6 @@ Nicht heute migrierbar: (1) openai-java pinnt Jackson 2 (nicht unter unserer Kon
 **Entscheidung:** Beobachten — Migration erst, wenn Jackson 2 vollständig entfernbar (auch aus
 openai). Revisit-Trigger: langchain4j 1.21+ (Aggregator schon auf 1.21.0-beta31) oder openai-java
 Jackson-3-Support. Dann eigene Story mit ADR (Major-Sprung, OSGi-Bundle-ClassPath, Error-Path).
-
-## ❓ Glossar: „Slot" doppelt belegt (2026-09-10)
-
-ADR-0036 nutzt „Slot" für per-Agent-Model-Config, ADR-0042 für Skill-Herkunft (Config- vs
-Projekt-Slot) — zwei Bedeutungen, ein Begriff. Optionen: (1) „Model-Slot" vs „Skill-Slot" als
-zwei domain-scoped Einträge, (2) Skill-Seite umbenennen (z. B. „Quelle"). Kein Handlungsdruck —
-beim nächsten Terminologie-Kontakt entscheiden.
-
-## ❓ Glossar eager laden? (2026-09-03)
-
-[glossary.md](glossary.md) angelegt. Optionen: (a) nur Jon · (b) Jon + Da Thinka + Da Mek ·
-(c) nur per Verweis aus index.md (Status quo). **PO-Empfehlung:** (b) als `ContextItem` im
-Turn-Context (nicht Static — sonst bricht jede Glossar-Änderung den Prompt-Cache), ~600 Token
-pro Turn. User-Entscheidung offen.
 
 ## ❓ buildWithDev sollte Da Mek vorher compacten (2026-09-03)
 
@@ -105,3 +92,18 @@ Bei Bedarf: LRU mit Obergrenze (z. B. 500). Rückversicherung mit User steht aus
 - Scrollverhalten Advanced Config wirkt komisch.
 - Dropdown-Umbau descoped (2026-09-03), Klassen gelöscht (`a1d8d35`, Git-Historie) —
   Wiederaufnahme = eigene Story.
+
+- **⏳ 2026-09-12 — Docs-SOLL-Hygiene-Sweep:** User-Direktive: Docs = reines SOLL, keine
+  implementierten Bug-/„war:"-Narrativen (der Plan trägt den Diff SOLL/IST). Umgesetzt für
+  advanced-configuration.md + model-loading.md (UI-Zyklus). Offen: Sweep über die übrigen
+  Feature-Docs (weitere „war:"-Blöcke, alte IST-Abschnitte) — als eigener Aufwasch, Scope vom
+  User bestätigen lassen.
+
+- **⏳ 2026-09-13 — Compressor-Dedup-Subtext-Edge (Da-Dok Release-Scan):** `AiCompressorAgent`-Dedup (`msg.indexOf(txt) < 0`) kann eine Einzel-Nachricht unterschlagen, deren (≤3000-Zeichen-truncated) Text Teiltext einer früheren Nachricht ist. Compact ist ohnehin lossy — bewusst akzeptiert, kein Release-Blocker; Revisit nur bei Kompaktier-Qualitäts-Beschwerden.
+- **⏳ 2026-09-13 — ThreadSafeMemory: RAM-only nach Persist-IOException (Da-Dok Release-Scan):** nach Persist-Fehler `store = null` + throw → Session läuft ohne Persistenz weiter (stille Loss NACH dem Fehler; präexistierendes Muster aller append/persist/clear-Pfade). Kein Blocker; Revisit nur bei Datenverlust-Meldungen.
+
+## Compact Input Budget (docs/compact-input-budget.md)
+
+- ⏳ Story ist 🚧 in design — R1–R5 SOLL von User festgelegt (2026-09-13, Budget=autoCompactAfter,
+  +5%-Toleranz, Stufen 8000→3000→drop-oldest, "session truncated"-Disclosure). Flip auf
+  ❌ specified nach Design-Abnahme. Homepage-Doku der +5%-Toleranz = Teil der Story.
