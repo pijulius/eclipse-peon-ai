@@ -27,7 +27,7 @@ neu gebaut, nachdem ich eine Nachricht sende."
   (im executeLoop-Zweig `ranTool(CompactSessionTool.NAME)`) — Aufwand klein, aber Änderung im
   Loop-Request-Path → erst bewerten.
 
-**Entscheidung (User 2026-09-11): Fix bauen — R-ST4 „System-Message-Rebuild nach In-Loop-Compact" — ❌ specified**
+**Entscheidung (User 2026-09-11): Fix gebaut — R-ST4 „System-Message-Rebuild nach In-Loop-Compact" — ✅ done (`a89cdc6`)**
 (Da-Thinka-Bewertung: Status quo hat einen echten Divergenz-Fall — Jons Static-Context enthält die
 Plan-Datei; Rest-Turn arbeitet nach Compact mit dem alten Plan-Snapshot, den der Sub-Agent gerade
 geändert hat. `compact()`-Invariante „force rebuild" wird vom Loop bis Turn-Ende ignoriert.
@@ -357,13 +357,13 @@ Fix: Result = `Preserved:\n<preserve>` / Marker `Session compacted.` (nie leer),
 entfernt, `onTool("Da Scribe done…")` unverändert. Zwei Alt-Assertions, die den Bug pinnnten,
 angepasst (`CompactSessionToolTest` delegiert → `doesNotContain`, `AiDeveloperAgentTest
 .test_clear_memory` → `isEqualTo("Session compacted.")`). Core Surefire 702/0.
-## Compact-Result genau einmal (SOLL 2026-09-11) — ❌ specified
+## Compact-Result genau einmal (SOLL 2026-09-11) — ✅ done (`1f2d0b0`/`ce3483d`)
 
 Auslöser: User-Befund 2026-09-11 — Compact-Result 2× sichtbar. Zwei unabhängige Duplikate:
 
 1. **Memory (Tool-Pfad):** Der 1f2d0b0-Marker `Session compacted.` (CompactSessionTool, kein
-   preserve) kollidiert mit der Resume-UserMessage `Session compacted. Resume the task using the
-   preserved context.` (AbstractAgent.compact:281) → `contains("Session compacted")` über alle
+   preserve) kollidiert mit der Resume-UserMessage `Session compacted:`
+   (AbstractAgent.compact:290) → `contains("Session compacted")` über alle
    Messages = 2 (ToolExecutionResultMessage + UserMessage).
 2. **Chat-Render (Button-Pfad):** `doCompressContext` leert `chatHistory` nur VOR dem Job
    (AIChatView.java:483); der Compressor postet die Summary live (AiCompressorAgent:51 →
@@ -372,7 +372,7 @@ Auslöser: User-Befund 2026-09-11 — Compact-Result 2× sichtbar. Zwei unabhän
 
 **Regel: Der Compact-Result-Text steht genau einmal — in der Memory UND im Chat-Render.**
 
-* **Memory:** kanonische Quelle ist die Resume-UserMessage (`Session compacted. Resume…`) — sie
+* **Memory:** kanonische Quelle ist die Resume-UserMessage (`Session compacted:`, AbstractAgent.compact:290) — sie
   existiert in BEIDEN Pfaden (Button ruft `compact()` direkt, ohne Tool-Result). Das
   no-preserve-Tool-Result trägt deshalb den Marker `(nothing preserved)` — nicht leer, aber ohne
   Duplikat des Resume-Texts. Mit preserve: `Preserved:\n<preserve>` (unverändert).

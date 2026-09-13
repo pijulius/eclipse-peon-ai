@@ -62,8 +62,8 @@ Hints for the dev phase, base rules `AGENTS.md`
 - **Known-benign warnings — do NOT re-triage every cycle** (2026-09-10, warning-cleanup cycle:
   64 → 12 problems, commits `51f43d2`/`a9124f1`/`56e9cc5`). The remaining 12 are accepted
   exceptions; fix real new ones, keep this list current:
-  - Plugin ×9 null-type-safety on method refs (`AIChatView:162-163`, `PeonAiService:401-402,489`,
-    `ModelComboWidget:122`, `EclipseUtil:318`, `EclipseWorkspaceReadFileTool:155`,
+  - Plugin ×9 null-type-safety on method refs (`AIChatView:164-165`, `PeonAiService:401-402,489`,
+    `ModelComboWidget:128`, `EclipseUtil:318`, `EclipseWorkspaceReadFileTool:155`,
     `StatusLineWidget:188`) — method refs to `@NonNull`-parameter functional interfaces; internal
     callers never pass null. (2026-09-12: `AiAgentStatusModel:48` moved with the agent-status
     module into core — now part of the core IDE-scope warnings above.)
@@ -111,6 +111,12 @@ These bit us repeatedly in this repo — check them before reporting an incremen
   mapping), that logic IS the feature under test. (Origin 2026-09-11: `AiCompressorAgent` dedup
   was inverted → compact input always empty; both existing tests asserted only the system
   prompt / the response side and stayed green for the broken send path.)
+
+- **„Green before the change" declarations only for tests that can actually run against the
+  pre-change state.** A new test coupled to the NEW type (e.g. asserts `instanceof Combo` where
+  the old code had `CCombo`) is swap-falsifiable by construction and is declared as such — never
+  as a regression guard that „was green before". (Origin 2026-09-12, config-cycle-2: all 3
+  R-A4 tests were red before the swap; the plan had declared 2 of them „green before and after".)
 
 ## Repo-specific API traps (verified, don't re-derive)
 
