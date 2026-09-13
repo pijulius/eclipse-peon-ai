@@ -126,9 +126,9 @@ public class PoDelegateTool extends AbstractTool {
     }
     
     @Tool(name = PoDelegateTool.REVIEW_PLAN_AGENT,
-            value = "Have your Peon-Review team member (Da Dok) review the implementation of the plan. Pass planPath ("
-                    + PeonPaths.PLAN_FILE
-                    + ") to set which plan is under review — it stays sticky; without it last plan is used. You can also talk to him.")
+            value = "Review team member (Da Dok) reviews a plan's implementation. "
+                  + "Pass planPath (" + PeonPaths.PLAN_FILE + ") to set the plan — stays sticky across calls. "
+                  + "Omit to reuse the last plan. Use for review questions, feedback, or approval.")
     public String reviewPlanAgent(@P(name = "prompt") String prompt,
             @P(name = "planPath", required = false) String planPath) {
         if (StringUtil.hasValue(planPath)) this.planPath = planPath.trim(); // sticky across calls

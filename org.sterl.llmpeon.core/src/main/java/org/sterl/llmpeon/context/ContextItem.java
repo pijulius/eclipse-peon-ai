@@ -22,7 +22,7 @@ public interface ContextItem {
     }
 
     /**
-     * Short human-readable label for loading reports ({@code "Loading 📋 <label>"}).
+     * Short human-readable label for loading reports ({@code "📋 Loading <label>"}).
      * Default is empty — items without a label load silently.
      */
     default String label() {

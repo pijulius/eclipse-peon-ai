@@ -576,7 +576,6 @@ class AbstractAgentTest {
         assertThat(contextCount).isOne();
     }
 
-    /** buildSystemPrompt fires monitor.onTool("Loading 📋 <label>") for labeled persistent context items. */
     @Test
     void test_buildSystemPrompt_reportsLabeledItems() {
         var config = LlmConfig.builder().model("mock").autoCompactAfter(80000).build();
@@ -598,11 +597,10 @@ class AbstractAgentTest {
         agent.call("test", monitor);
 
         // THEN — onTool called for labeled item only
-        assertThat(toolMessages).contains("Loading 📋 docs/memory.md (Peon-Dev)");
+        assertThat(toolMessages).contains("📋 Loading docs/memory.md (Peon-Dev)");
         assertThat(toolMessages).noneMatch(m -> m.contains("unlabeled"));
     }
 
-    /** restoreTurnContext fires monitor.onTool("Loading 📋 <label>") for labeled turn context items. */
     @Test
     void test_restoreTurnContext_reportsLabeledItems() {
         var config = LlmConfig.builder().model("mock").autoCompactAfter(80000).build();
@@ -725,7 +723,7 @@ class AbstractAgentTest {
         var userTexts = extractUserTexts(agent.getMemory().getCopy());
         assertThat(userTexts).hasSize(1);
         assertThat(userTexts.get(0)).isEqualTo("hi");
-        assertThat(toolMessages).noneMatch(m -> m.startsWith("Loading 📋"));
+        assertThat(toolMessages).noneMatch(m -> m.startsWith("📋 Loading "));
     }
 
     /** S4: keyed dedup — render is never called when the key is already in history. */
@@ -871,6 +869,6 @@ class AbstractAgentTest {
         agent.call("test", monitor);
 
         // THEN — no onTool calls for unlabeled items
-        assertThat(toolMessages).noneMatch(m -> m.startsWith("Loading 📋"));
+        assertThat(toolMessages).noneMatch(m -> m.startsWith("📋 Loading "));
     }
 }

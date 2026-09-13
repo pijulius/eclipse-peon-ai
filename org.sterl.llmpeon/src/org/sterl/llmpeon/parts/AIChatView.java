@@ -225,14 +225,18 @@ public class AIChatView implements EclipseAiMonitor {
     @org.eclipse.e4.core.di.annotations.Optional
     public void onTextSelection(@Named(IServiceConstants.ACTIVE_SELECTION) ITextSelection ts) {
         if (parent == null || parent.isDisposed()) return;
-        aiService.getUserContext().setTextSelection(ts);
-        EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
+        if (aiService.getUserContext().setTextSelection(ts)) {
+            EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
+        }
     }
 
     @Inject
     @org.eclipse.e4.core.di.annotations.Optional
     public void onSelection(@Named(IServiceConstants.ACTIVE_SELECTION) Object o) {
-        if (o instanceof ITextSelection) return;
+        if (o instanceof ITextSelection ts) {
+            aiService.getUserContext().setTextSelection(ts);
+            return;
+        }
         if (parent == null || parent.isDisposed()) return;
 
         aiService.getUserContext().setClassFile(null);

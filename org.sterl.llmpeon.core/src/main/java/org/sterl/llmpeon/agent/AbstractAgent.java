@@ -354,7 +354,7 @@ public abstract class AbstractAgent implements AiAgent {
                 String rendered = item.render();
                 if (rendered != null) {
                     if (StringUtil.hasValue(item.label())) {
-                        monitor.onTool("Loading 📋 " + item.label() + " (" + getName() + ")");
+                        monitor.onTool("📋 Loading " + item.label() + " (" + getName() + ")");
                     }
                     prompt = prompt + System.lineSeparator() + System.lineSeparator() + rendered;
                 }

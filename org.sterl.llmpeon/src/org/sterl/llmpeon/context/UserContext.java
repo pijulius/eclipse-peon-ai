@@ -137,24 +137,33 @@ public class UserContext {
         return textSelection;
     }
 
-    public void setTextSelection(ITextSelection textSelection) {
-        this.textSelection = textSelection;
+    /**
+     * @return <code>true</code> if an UI update is needed due to line changes, otherwise <code>false</code> 
+     */
+    public boolean setTextSelection(ITextSelection newText) {
+        var old = this.textSelection;
+        this.textSelection = newText;
+        if (old == newText) return false;
+        if (old == null || newText == null) return true;
+        return old.getStartLine() != newText.getStartLine()
+            || old.getEndLine() != newText.getEndLine();
     }
 
+    /**
+     * @return <code>true</code> if an UI update is needed due to line changes, otherwise <code>false</code> 
+     */
     public boolean setSelectedResource(IResource selectedResource) {
         var result = Objects.equals(JdtUtil.pathOf(selectedResource), 
                 JdtUtil.pathOf(this.selectedResource));
 
         // clear text selection if a different file is selected ...
-        if (result) {
-            this.textSelection = null;
-        }
+        if (!result) this.textSelection = null;
 
         this.selectedResource = selectedResource;
         // if we have a selected file it can't be a class anymore...
         if (this.selectedResource != null) this.clazz = null;
 
-        return result;
+        return !result;
     }
 
     public boolean isProjectPinned() {
