@@ -191,7 +191,7 @@ public class ThreadSafeMemory {
     public synchronized ChatMessage get(int index) {
         return this.memory.get(index);
     }
-
+    
     private void append(ChatMessage message) {
         var s = store;
         if (s == null) return;
