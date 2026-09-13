@@ -101,3 +101,9 @@ Bei Bedarf: LRU mit Obergrenze (z. B. 500). Rückversicherung mit User steht aus
 
 - **⏳ 2026-09-13 — Compressor-Dedup-Subtext-Edge (Da-Dok Release-Scan):** `AiCompressorAgent`-Dedup (`msg.indexOf(txt) < 0`) kann eine Einzel-Nachricht unterschlagen, deren (≤3000-Zeichen-truncated) Text Teiltext einer früheren Nachricht ist. Compact ist ohnehin lossy — bewusst akzeptiert, kein Release-Blocker; Revisit nur bei Kompaktier-Qualitäts-Beschwerden.
 - **⏳ 2026-09-13 — ThreadSafeMemory: RAM-only nach Persist-IOException (Da-Dok Release-Scan):** nach Persist-Fehler `store = null` + throw → Session läuft ohne Persistenz weiter (stille Loss NACH dem Fehler; präexistierendes Muster aller append/persist/clear-Pfade). Kein Blocker; Revisit nur bei Datenverlust-Meldungen.
+
+## Compact Input Budget (docs/compact-input-budget.md)
+
+- ⏳ Story ist 🚧 in design — R1–R5 SOLL von User festgelegt (2026-09-13, Budget=autoCompactAfter,
+  +5%-Toleranz, Stufen 8000→3000→drop-oldest, "session truncated"-Disclosure). Flip auf
+  ❌ specified nach Design-Abnahme. Homepage-Doku der +5%-Toleranz = Teil der Story.
