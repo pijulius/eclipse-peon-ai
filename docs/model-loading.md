@@ -84,7 +84,7 @@ Eingabe erlaubt, konfiguriertes Modell bleibt erhalten (Feld-Text, R-ML4) auch w
 Liste steht, Single-Flight pro Identität + Secret-Masking (ADR-0040). Danach erst Design-Studie github-copilot-for-eclipse
 (separater Schritt, advanced-configuration.md R-A3).
 
-## R-ML4 — Liste = Server-Liste, Eingabe bleibt Feld-Text (2026-09-12, User-Entscheidung nach Smoke — ersetzt die 2b-Append-Regel)
+## R-ML4 — Liste = Server-Liste, Eingabe bleibt Feld-Text — ✅ done (ui-config Inc-5 `985b244`, User-Re-Smoke ✅ 2026-09-13; 2026-09-12 User-Entscheidung nach Smoke — ersetzt die 2b-Append-Regel)
 
 Die Combo-Liste besteht **ausschließlich aus Server-Einträgen** — die getippte Eingabe wird
 **nicht** als Eintrag aufgenommen (User 2026-09-12: „den Code entfernen, wo die aktuelle Auswahl
