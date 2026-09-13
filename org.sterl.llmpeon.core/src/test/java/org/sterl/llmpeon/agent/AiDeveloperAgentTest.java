@@ -293,7 +293,7 @@ public class AiDeveloperAgentTest {
         assertThat(userTexts).doesNotContain("null");
 
         // AND — turn context survives via turnContextSupplier for compact restore
-        assertThat(userTexts).contains("USER: We are all doomed!");
+        assertThat(userTexts).contains("We are all doomed!");
         
         // WHEN
         subject.call("Foo 2", null);

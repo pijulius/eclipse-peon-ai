@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.ChatMessageType;
 import dev.langchain4j.data.message.Content;
 import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
@@ -87,36 +88,55 @@ public class ChatMessageUtil {
         return toString(msg, true, maxSize);
     }
     
+    /**
+     * Converts ChatMessages to a simple string.
+     * SYSTEM messages are ignored!!
+     */
     public static String toString(ChatMessage msg, boolean includeThink, int toolMessageSize) {
+        if (msg.type() == ChatMessageType.SYSTEM) return "";
+        if (msg.type() == ChatMessageType.CUSTOM) return "";
+
         var result = new StringBuilder();
-        result.append(msg.type()).append(": ");
+        var nl = System.lineSeparator();
+        result.append(msg.type()).append(":").append(nl);
         if (msg instanceof UserMessage um) {
             um.contents().stream().filter(m -> m instanceof TextContent)
               .map(m -> (TextContent)m)
-              .forEach(c -> result.append(c.text()).append(System.lineSeparator()));
+              .forEach(c -> result.append(c.text()).append(nl));
 
         } else if (msg instanceof AiMessage m) {
-
             if (StringUtil.hasValue(m.text())) {
-                result.append(m.text()).append(System.lineSeparator());
+                result.append(m.text()).append(nl);
             }
+
             if (includeThink && StringUtil.hasValue(m.thinking())) {
-                result.append("AI think: ").append(m.thinking()).append(System.lineSeparator());
+                result.append("Think: ").append(m.thinking()).append(nl);
             }
 
             if (toolMessageSize > 0 && m.hasToolExecutionRequests()) {
                 for (var tr : m.toolExecutionRequests()) {
-                    result.append(StringUtil.trimToLength(tr.toString(), toolMessageSize))
-                          .append(System.lineSeparator());
+                    result.append("tool name: ").append(tr.name()).append(nl)
+                          .append("arguments:").append(nl)
+                          .append(StringUtil.trimToLength(tr.arguments(), toolMessageSize))
+                          .append(nl)
+                          .append(trimmedTag(tr.arguments(), toolMessageSize));
                 }
             }
 
-            result.append(System.lineSeparator());
         } else if (toolMessageSize > 0 && msg instanceof ToolExecutionResultMessage tr) {
-            result.append(StringUtil.trimToLength(tr.toString(), toolMessageSize))
-                  .append(System.lineSeparator());
+            result.append("tool name: ").append(tr.toolName()).append(nl)
+                  .append("result:").append(nl)
+                  .append(StringUtil.trimToLength(tr.text(), toolMessageSize))
+                  .append(nl)
+                  .append(trimmedTag(tr.text(), toolMessageSize));
         }
         return result.toString();
+    }
+    
+    private static String trimmedTag(String value, int toolMessageSize) {
+        return value != null && value.length() > toolMessageSize 
+                ? "(trimmed)" + System.lineSeparator() 
+                : "";
     }
     
     public static String toString(List<Content> contents) {

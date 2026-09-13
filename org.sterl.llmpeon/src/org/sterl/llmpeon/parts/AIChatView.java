@@ -61,7 +61,6 @@ import org.sterl.llmpeon.tool.tools.ShellTool;
 import org.sterl.llmpeon.voice.VoiceConfig;
 import org.sterl.llmpeon.voice.VoiceInputService;
 
-import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import jakarta.annotation.Nullable;
@@ -360,7 +359,6 @@ public class AIChatView implements EclipseAiMonitor {
      */
     private void refreshChat() {
         var memory = aiService.getActiveAgent().getMemory();
-        System.err.println("refreshChat...: " + memory.size());
         chatHistory.clear();
         memory.forEach(chatHistory::appendMessage);
         refreshStatusLine();

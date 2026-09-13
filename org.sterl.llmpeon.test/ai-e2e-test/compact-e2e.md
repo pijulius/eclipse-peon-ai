@@ -1,9 +1,10 @@
 # Compact-Check (2 Compacts: einmal Jon, einmal Da Mek)
 
-Compact Agent erhalte im WHAT: Hallo von Paul
+Compact Agent erhalte im WHAT: Hallo von Paul und erstelle einen sonst volles compact result.
 
 Jeder Agent soll sich diese oder das delta in "preserve" vom `compactSession` tool übergeben.
 Jon: rufe nicht das compact tool auf um die Agenten zu compactieren. Sag ihnen das sie selber compact aufrufen sollen!
+RUFE NICHT `compactDev` auf - nur `compactSession`?!
 
 ## 1. Jon (du):
 - Mache ein „Browse Projects“ (eclipseList).

@@ -38,7 +38,7 @@ public class AiCompressorAgent {
             var txt = toText(m);
             // avoid any duplications in the compact message
             if (msg.indexOf(txt) < 0) {
-                msg.append(txt).append(System.lineSeparator()).append(System.lineSeparator());
+                msg.append(txt).append(System.lineSeparator());
             }
         }
 
@@ -67,7 +67,7 @@ public class AiCompressorAgent {
 
     String toText(ChatMessage msg) {
         var result = new StringBuilder();
-        result.append(System.lineSeparator()).append(msg.type()).append(":\n");
+        result.append(msg.type()).append(":").append(System.lineSeparator());
         result.append(ChatMessageUtil.toString(msg, false, 3000));
         return result.toString();
     }

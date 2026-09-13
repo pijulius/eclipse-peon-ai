@@ -259,7 +259,7 @@ public class ToolService {
         } else {
             result = executor.run(tr, req);
         }
-        return ToolExecutionResultMessage.from(tr.id(), tr.name(), result);
+        return ToolExecutionResultMessage.from(tr, result);
     }
 
     /**
