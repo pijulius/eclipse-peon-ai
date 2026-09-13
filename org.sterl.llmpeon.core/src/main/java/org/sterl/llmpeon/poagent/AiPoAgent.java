@@ -133,12 +133,16 @@ public class AiPoAgent extends AbstractAgent {
     }
     
     @Override
-    public boolean compact(AiMonitor monitor) {
+    public boolean compact(AiMonitor inMonitor) {
+        var monitor = AiMonitor.nullSafety(inMonitor);
         var result = super.compact(monitor);
         toolService.getTool(PoDelegateTool.class).ifPresent(t -> {
-            t.compactPlan();
-            t.compactReview();
-            t.compactDev();
+            monitor.onTool("Compact Da Thinka");
+            monitor.onTool(t.compactPlan());
+            monitor.onTool("Compact Da Doc");
+            monitor.onTool(t.compactReview());
+            monitor.onTool("Compact Da Mek");
+            monitor.onTool(t.compactDev());
         });
         return result;
     }
