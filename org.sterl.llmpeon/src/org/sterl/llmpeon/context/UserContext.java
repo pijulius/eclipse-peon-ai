@@ -150,7 +150,7 @@ public class UserContext {
     }
 
     /**
-     * @return <code>true</code> if an UI update is needed due to line changes, otherwise <code>false</code> 
+     * @return <code>true</code> if the selected resource changed (UI update needed), otherwise <code>false</code>
      */
     public boolean setSelectedResource(IResource selectedResource) {
         var result = Objects.equals(JdtUtil.pathOf(selectedResource), 
