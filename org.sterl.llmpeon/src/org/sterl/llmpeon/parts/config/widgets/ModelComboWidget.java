@@ -116,9 +116,10 @@ public class ModelComboWidget {
     }
 
     /**
-     * Applies the fetched model list to the combo. Dedup rule (R-ML4): the typed input is
-     * appended only if no entry equals it case-insensitively; on a match the server's ID wins
-     * (canonical) and is selected; without a server list the input stays verbatim.
+     * Applies the fetched model list to the combo. No-append rule (R-ML4): the list holds the
+     * server's entries only — the typed field text is never added as an entry. If the field text
+     * matches an entry case-insensitively, the server's ID wins (canonical) and is selected;
+     * otherwise the field text stays verbatim.
      */
     private void applyModelList(List<AiModel> fetched, ConnectionIdentity identity) {
         EclipseUtil.runInUiThread(modelCombo, () -> {
@@ -127,12 +128,9 @@ public class ModelComboWidget {
             if (fetched != null) items.addAll(fetched.stream().map(AiModel::getId).toList());
             var configured = StringUtil.stripToNull(modelCombo.getText());
             var idx = indexOfIgnoreCase(items, configured);
-            if (configured != null && idx < 0) {
-                items.add(configured);
-                idx = items.size() - 1;
-            }
             modelCombo.setItems(items.toArray(String[]::new));
             if (idx >= 0) modelCombo.select(idx);
+            else if (configured != null) modelCombo.setText(configured);
         });
     }
 

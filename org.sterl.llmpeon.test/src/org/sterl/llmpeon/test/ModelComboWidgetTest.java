@@ -91,8 +91,8 @@ public class ModelComboWidgetTest extends AbstractSwtUiTest {
         });
         waitUntil(() -> ui(() -> List.of(combo(built.parent()).getItems()).contains("new-model")), "refresh not applied");
 
-        // THEN the dropdown shows the new list (configured model kept, still selected)
-        assertArrayEquals(new String[] { "new-model", "gpt-4o" }, ui(() -> combo(built.parent()).getItems()));
+        // THEN the dropdown shows the new list (field text kept verbatim, not in list)
+        assertArrayEquals(new String[] { "new-model" }, ui(() -> combo(built.parent()).getItems()));
         assertEquals("gpt-4o", ui(built.widget()::getModel));
     }
 
@@ -133,7 +133,7 @@ public class ModelComboWidgetTest extends AbstractSwtUiTest {
         ui(() -> { built.widget().fetchModels(); return null; });
         waitUntil(() -> ui(() -> combo(built.parent()).getItems().length) > 0, "model list not applied");
 
-        // THEN the list has exactly one entry for that name (SOLL: append only if not in the server list)
+        // THEN the list has exactly one entry for that name (SOLL: list = server entries only)
         var items = ui(() -> combo(built.parent()).getItems());
         assertEquals(1, (int) List.of(items).stream().filter(s -> s.equalsIgnoreCase("foo")).count());
         // canonical (PO 2026-09-12): the server's ID wins — typed variant disappears
@@ -155,11 +155,26 @@ public class ModelComboWidgetTest extends AbstractSwtUiTest {
             clickRefresh(built.parent());
             return null;
         });
-        waitUntil(() -> ui(() -> List.of(combo(built.parent()).getItems()).contains("typed-x")), "fallback list not applied");
+        sleep(SETTLE_MS); // the failing round-trip + apply settles well within this window
 
         // THEN the typed input stays verbatim (no canonicalization without a matching server entry)
-        assertArrayEquals(new String[] { "server-a", "typed-x" }, ui(() -> combo(built.parent()).getItems()));
+        assertArrayEquals(new String[] { "server-a" }, ui(() -> combo(built.parent()).getItems()));
         assertEquals("typed-x", ui(built.widget()::getModel));
+    }
+
+    @Test
+    public void typedUnknownModelIsNotAddedToList() {
+        // GIVEN the server list does not contain the typed model
+        mockLlmServer.setModelIds(List.of("server-a"));
+        var built = ui(() -> newWidget("typed-x"));
+
+        // WHEN the page-open fetch completes
+        ui(() -> { built.widget().fetchModels(); return null; });
+        waitUntil(() -> ui(() -> combo(built.parent()).getItems().length) > 0, "model list not applied");
+
+        // THEN the list contains only the server's entries (no append) and the field keeps the typed text
+        assertArrayEquals(new String[] { "server-a" }, ui(() -> combo(built.parent()).getItems()));
+        assertEquals("typed-x", ui(() -> combo(built.parent()).getText()));
     }
 
     // --- helpers ---

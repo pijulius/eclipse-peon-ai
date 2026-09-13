@@ -263,7 +263,7 @@ Provider/Shell-Command — gleicher Dropdown-Button. Label und Combo erscheinen 
 wie die Sibling-Labels), Combo in der Feld-Spalte. Der Refresh-Button sitzt **unter** dem Combo
 (Placement/Style wie „Check Host and Port" beim URL-Feld). **Verhalten unverändert:** lazy fetch
 einmal pro Verbindungs-Identität, Refresh holt neu, manuelle Modelleingabe erlaubt, konfiguriertes
-Modell bleibt selektiert auch wenn es nicht in der Liste steht, Single-Flight + Secret-Masking
+Modell bleibt erhalten (Feld-Text, R-ML4) auch wenn es nicht in der Liste steht, Single-Flight + Secret-Masking
 bleiben (ADR-0040) → R-ML3 in [model-loading.md](model-loading.md). Umsetzung:
 `ModelComboWidget` = Controller (kein Composite) — Combo + Refresh im Parent-2-Spalten-Grid, Label
 je Caller (Basic raw `Label` SWT.LEFT, Advanced `addLabel` SWT.END),

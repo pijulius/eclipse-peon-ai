@@ -13,8 +13,9 @@ Mechanik: [ADR-0034](adr/0034-connection-cache-by-identity.md). Die Liste gilt p
 Fetch-Fehler → konfiguriertes Modell bleibt gesetzt, kein Refetch beim Agentenwechsel;
 **Refresh-Button unter dem Combo** (R-ML3) = manueller Refetch (Fehler → alter Cache bleibt).
 Identitätswechsel der effektiven Verbindung → neuer Fetch. Konfiguriertes Modell nicht in der
-Liste → **bleibt gesetzt** (bewusst kein Auto-Switch auf ein Listen-Modell); unbekanntes
-Modell wird der Liste **angehängt** statt sie zu ersetzen.
+Liste → **bleibt gesetzt** als Feld-Text (bewusst kein Auto-Switch auf ein Listen-Modell); die
+Liste besteht **ausschließlich aus Server-Einträgen** — die getippte Eingabe wird nicht als
+Eintrag aufgenommen (R-ML4).
 
 ```
 GIVEN die Modell-Liste für eine Identität wurde erfolgreich geladen
@@ -79,24 +80,26 @@ Page (gleiche Ausrichtung wie die Sibling-Labels), Combo in der Feld-Spalte. Der
 URL-Feld).
 
 Verhalten unverändert (R-ML-Regeln + HP): fetch einmal pro Identität, Refresh holt neu, manuelle
-Eingabe erlaubt, konfiguriertes Modell bleibt selektiert auch wenn nicht in der Liste, Single-Flight
-pro Identität + Secret-Masking (ADR-0040). Danach erst Design-Studie github-copilot-for-eclipse
+Eingabe erlaubt, konfiguriertes Modell bleibt erhalten (Feld-Text, R-ML4) auch wenn es nicht in der
+Liste steht, Single-Flight pro Identität + Secret-Masking (ADR-0040). Danach erst Design-Studie github-copilot-for-eclipse
 (separater Schritt, advanced-configuration.md R-A3).
 
-## R-ML4 — Eingabe-Dedup gegen die Server-Liste (case-insensitive) — ❌ specified (2026-09-12, User-Bug-Report; Fix im selben Zyklus)
+## R-ML4 — Liste = Server-Liste, Eingabe bleibt Feld-Text (2026-09-12, User-Entscheidung nach Smoke — ersetzt die 2b-Append-Regel)
 
-Die getippte Eingabe bleibt nur dann als **eigener** Eintrag in der Liste, wenn sie **nicht**
-(case-insensitiv) in der Server-Modell-Liste steht — Schreibweisen-Varianten sind dasselbe Modell.
-Bei Match gewinnt die **Server-ID** (canonical): das Combo selektiert den Server-Eintrag, die
-getippte Variante erscheint nicht und wird auch nicht gespeichert. **Ohne Server-Liste** (Fetch
-fehlgeschlagen/leer) bleibt die Eingabe verbatim — es gibt keine Kanonisierungsquelle. Die
-Server-Liste selbst wird nicht dedupliziert (Server-verantwortet).
+Die Combo-Liste besteht **ausschließlich aus Server-Einträgen** — die getippte Eingabe wird
+**nicht** als Eintrag aufgenommen (User 2026-09-12: „den Code entfernen, wo die aktuelle Auswahl
+mit in die Liste aufgenommen wird"; ersetzt die 2b-Regel „unbekanntes Modell wird der Liste
+angehängt"). Die Eingabe bleibt als **Feld-Text** erhalten und wird so gespeichert. Matcht der
+Feld-Text einen Server-Eintrag (case-insensitive), selektiert das Combo den **Server-Eintrag**
+(canonical — die getippte Variante verschwindet). **Ohne Server-Liste** (Fetch
+fehlgeschlagen/leer) bleibt der Feld-Text verbatim, die Liste bleibt beim alten Cache-Stand.
 
 - GIVEN die Server-Liste enthält `FOO`, WHEN der User `foo` getippt hat und der Fetch
   abgeschlossen ist, THEN enthält das Combo genau **einen** Eintrag (`FOO`) und zeigt/speichert
   `FOO` → `ModelComboWidgetTest.typedCaseVariantOfListedModelIsNotDuplicated`
-- GIVEN das konfigurierte Modell ist ein exakter Listeneintrag, WHEN der Fetch abgeschlossen ist,
-  THEN kein Duplikat → `ModelComboWidgetTest.fetchShowsListAndKeepsConfiguredModel`
-- GIVEN Fetch fehlgeschlagen/leere Liste + getipptes Modell, WHEN Apply, THEN bleibt die Eingabe
-  verbatim erhalten → `ModelComboWidgetTest.refreshFailureKeepsPreviousList` (Fallback-Pfad läuft
-  über denselben apply-Knoten)
+- GIVEN das getippte Modell ist in keiner Server-Liste, WHEN der Fetch abgeschlossen ist,
+  THEN enthält das Combo nur die Server-Einträge (kein Append) und der Feld-Text bleibt verbatim
+  → `ModelComboWidgetTest.typedUnknownModelIsNotAddedToList` (neu)
+- GIVEN Fetch fehlgeschlagen/leere Liste + getipptes Modell, WHEN Apply, THEN bleibt der
+  Feld-Text verbatim (keine Kanonisierungsquelle) und die Liste bleibt der alte Cache-Stand
+  → `ModelComboWidgetTest.refreshFailureKeepsTypedModelVerbatim` (angepasst: kein Listen-Append)
