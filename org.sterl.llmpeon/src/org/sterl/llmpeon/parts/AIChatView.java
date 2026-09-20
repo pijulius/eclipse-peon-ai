@@ -18,6 +18,8 @@ import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.eclipse.e4.ui.di.Focus;
 import org.eclipse.e4.ui.services.IServiceConstants;
 import org.eclipse.jdt.core.IClassFile;
+import org.eclipse.jdt.core.IJavaElement;
+import org.eclipse.jdt.core.IType;
 import org.eclipse.jface.text.ITextSelection;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
@@ -30,7 +32,9 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.ui.IWorkingSet;
 import org.sterl.llmpeon.agent.AiAgent;
+import org.sterl.llmpeon.agent.AiAgentStatusModel;
 import org.sterl.llmpeon.agent.AiPlanAgent;
+import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.command.SlashCommandResolver;
 import org.sterl.llmpeon.command.SlashCommandResolver.SlashResult;
@@ -182,7 +186,9 @@ public class AIChatView implements EclipseAiMonitor {
         headerBar = new HeaderBarWidget(footerBlock, SWT.PUSH,
                 () -> aiService.getActiveAgent().getName(),
                 aiService::getToolStatus,
-                aiService::getStatusAgents);
+                aiService::getStatusAgents,
+                this::doCompressAgent,
+                () -> inFlightTurns.get() > 0);
         headerBar.setLayoutData(new RowData());
 
         applyConfig();
@@ -238,31 +244,48 @@ public class AIChatView implements EclipseAiMonitor {
     @Inject
     @org.eclipse.e4.core.di.annotations.Optional
     public void onTextSelection(@Named(IServiceConstants.ACTIVE_SELECTION) ITextSelection ts) {
-        if (parent == null || parent.isDisposed()) return;
-        if (aiService.getUserContext().setTextSelection(ts)) {
-            EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
+        applyTextSelection(ts);
+    }
+
+    /**
+     * Applies a text selection event (UI thread): the open file becomes the selected resource
+     * first — a file switch clears the previous selection — then the selection itself is set.
+     */
+    private void applyTextSelection(ITextSelection ts) {
+        var uc = aiService.getUserContext();
+        boolean changed = false;
+        if (parent != null && !parent.isDisposed()) {
+            // R-SEL-2: open file = known resource (UI-thread path of EclipseUtil.getOpenFile)
+            changed |= uc.setSelectedResource(EclipseUtil.getOpenFile().orElse(null));
         }
+        changed |= uc.setTextSelection(ts);   // nachher: Resource-Wechsel hat alte Selektion bereits geräumt
+        if (changed) EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
     }
 
     @Inject
     @org.eclipse.e4.core.di.annotations.Optional
     public void onSelection(@Named(IServiceConstants.ACTIVE_SELECTION) Object o) {
         if (o instanceof ITextSelection ts) {
-            aiService.getUserContext().setTextSelection(ts);
+            applyTextSelection(ts);
             return;
         }
         if (parent == null || parent.isDisposed()) return;
 
-        aiService.getUserContext().setClassFile(null);
         var selectionElement = EclipseUtil.selectionElement(o).orElse(null);
-        if (selectionElement instanceof IClassFile classFile) aiService.getUserContext().setClassFile(classFile);
+        // R-SEL-4: a type selection wins — it must be detected BEFORE resolveResource, which
+        // would resolve a source IType to its .java file and kill the type. Resource and
+        // project stay untouched on a type event.
+        if (selectionElement instanceof IType || selectionElement instanceof IClassFile) {
+            if (aiService.getUserContext().setJavaType((IJavaElement) selectionElement))
+                EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
+            return;
+        }
         var selection = EclipseUtil.resolveResource(selectionElement).orElse(null);
         if (selection == null && selectionElement != null && !(selectionElement instanceof IWorkingSet)
                 && !selectionElement.getClass().getName().equals("org.eclipse.ui.internal.views.log.LogEntry")
                 && aiService.getConfig().isDebugMode()) {
             LOG.info("Unknown resource type selected " + selectionElement.getClass());
         }
-        aiService.getUserContext().setTextSelection(null);
         if (aiService.getUserContext().setSelectedResource(selection)) {
             EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
         }
@@ -337,7 +360,10 @@ public class AIChatView implements EclipseAiMonitor {
     public void onFileUpdate(AiFileUpdate update) {
         if (parent.isDisposed()) return;
         var diff = SimpleDiff.unifiedDiff(update.file(), update.oldContent(), update.newContent());
-        EclipseUtil.runInUiThread(parent, () -> chatHistory.showDiff(diff));
+        EclipseUtil.runInUiThread(parent, () -> {
+            if (diff.startsWith("--- a/")) chatHistory.showDiff(diff);
+            else if (!diff.isEmpty()) chatHistory.appendMessage(new SimpleMessage(Type.TOOL, diff));
+        });
     }
 
     @Override
@@ -516,6 +542,37 @@ public class AIChatView implements EclipseAiMonitor {
                 handleDoneChatResponse(active.getName(), null, monitor, ex);
             }
             return PeonConstants.status("Compacted " + active.getName(), ex);
+        }).schedule();
+    }
+
+    /** Per-slave compact from the header roster: compresses exactly the clicked slave (R18 — no
+     *  cascade). Job mechanics mirror {@link #doCompressContext} except the chat is NOT rebuilt —
+     *  the compressor summary streams into the chat live via the monitor and stays; a rebuild
+     *  would replace it with the active agent's (uncompacted-here) memory. Only the roster
+     *  refreshes (context size visibly drops); the R16 skip (< 3 messages) surfaces as
+     *  "Nothing to compact" instead of a silent no-op. */
+    private void doCompressAgent(NamedAgent slave) {
+        var agent = slave.agent();
+        if (agent.isWorking() || inFlightTurns.get() > 0) return; // defensive — buttons are disabled
+        inFlightTurns.incrementAndGet();
+        LOG.info("turn submit (slave compact): agent=" + slave.uiName() + " in-flight=" + inFlightTurns.get());
+        lockWhileWorking(true);
+        Job.create("Compact " + slave.uiName(), monitor -> {
+            monitorRef.set(monitor);
+            Exception ex = null;
+            boolean result = false; // captured before the finally's monitorRef reset (async-state safety)
+            try {
+                result = agent.compact(this);
+                // NO refreshChat here — a rebuild from the ACTIVE agent's memory would wipe the
+                // streamed slave summary (it lives in the slave's memory, not the active one).
+                // Jon's own compact (doCompressContext / CompactSessionTool) still rebuilds.
+                EclipseUtil.runInUiThread(parent, headerBar::refreshRoster); // context size visibly drops
+            } catch (Exception e) {
+                ex = handleChatException(e);
+            } finally {
+                handleDoneChatResponse(slave.uiName(), null, monitor, ex);
+            }
+            return PeonConstants.status(AiAgentStatusModel.compactResult(result, slave.uiName()), ex);
         }).schedule();
     }
 

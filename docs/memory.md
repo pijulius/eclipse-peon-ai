@@ -1,31 +1,39 @@
-# Session-Stand (2026-09-13 — Compact-Slot-Bug-Zyklus als nächstes)
+# Session-Stand — 2026-09-19
 
-## Release ui-config + UserContext — ✅ KOMPLETT, gemerged & gepusht
+## Wo wir stehen
 
-`main` = origin/main (0/0, Merge `3d38ef6` + User `bc24da9`). Suite 201/0. Compact-Konflikt
-(`AiCompressorAgent.java:41-45`, Dedup-Fix doppelt) zugunsten Branch aufgelöst.
-UserContext-Tests (12) + StandingOrdersBuilderTest-Fix: `a625167`/`13bb500`.
+**Branch `bugfix/user-context-selection`, Zyklus „Edit-Guard + Lint-Polish + Read-Zeilennummern" KOMPLETT:**
+- Step-0: Pauls Count-Guard + onTool + 5 SOLL-Docs committed
+- `7800a56` Inc 1 Edit-Guard (oldString Pflicht, `trim().length() >= 3`, up-front in `FileUtils.applyEdit`, alle 3 Oberflächen; null→"" entfernt) — Core 875/0, Plugin 222/0
+- `15e3eab` Inc 2 Lint-Polish (R-DL-19 `Sources:`-Zeile relativ, R-DL-20 onTool-Statuszeile, UC-DL-62/63 belegt) — Core 880/0 (Worktree-verifiziert)
+- `e0538fa` Inc 3 R9 (Ganzdatei MIT Zeilennummern, supersedet R1c-Klausel) + R8 (Grep = Trefferzeilen `pfad:42: text` unpadded, MAX_GREP_LINES=100 + Disclosure, per-File-Counts weg, Clean Break) — Core 884/0, Plugin 223/0
+- `fdaed04` AGENTS-DEV: `-pl test -am` zieht Host NICHT in Reaktor → `-pl org.sterl.llmpeon,org.sterl.llmpeon.test -am verify`
+- `73bb156` Review-Fixes (staler Timeout-Wrapper umbenannt, unused `effectiveRoot` weg)
+- **Review: CONCERNS → gelöst, abgenommen. Plan archiviert (`planImplemented`).** Docs ✅: Edit-Guard, R-DL-19/20, R8/R9. Lint: UC-DL-62/63 belegt, 0 neue Befunde (42 UNBELEGT_ERLEDIGT = vorbestehender Bestand).
 
-## Nächste Zyklen (User-Reihenfolge 2026-09-13)
+**Da Mek IST gecompacted (21%).**
 
-1. **Compact-Slot-Bug** — ✅ FIXED (`efa22df` + Wire-Tests `3977a8d`: COMPACT Think/extraBody
-   + Custom-Agent-Frontmatter on-the-wire; Surefire 734/0), Da-Dok-Review ACCEPTED.
-   COMPACT-Slot steuert den Call vollständig via `ConfiguredChatModel.modelFor(agent)`;
-   leer → Base. Docs: advanced-configuration.md + compact-input-budget.md.
-   **Merge/Release = User; User-Smoke: Compact mit fremder Slot-URL konfigurieren und beobachten.**
-2. **Compact-Input-Budget Light + Context-Noise** — Story ❌ specified
-   (docs/compact-input-budget.md), zusammen mit Noise-Idee (open-points.md ❓) ausarbeiten,
-   vor dem Bau nochmal gemeinsam drüber.
-3. **ApiRetry-Cancel-Bug** (memory #21) — Verifikation beim Bau (User).
-4. Danach: Compact-Delay (~4-5s, Verdacht StreamingBridge-Poll/onCompleteResponse), R-A3
-   Copilot-Studie, Docs-Hygiene-Sweep, Stale-Guard-Follow-up-Test.
+## Nächste Schritte
 
-**IST Compact-Input (User, gepusht):** LinkedHashSet-Dedup (exakt, O(n)) statt indexOf-Substring,
-Cap 4000. Dokumentiert in docs/compact-input-budget.md R2. Homepage: +5%-Toleranz-Doku = Teil der
-Budget-Story.
+1. **Paul: Merge/Squash** `bugfix/user-context-selection` → main (enthält R-SEL-4 + R-DL-18 + diesen Zyklus — EIN Branch nach Pauls Wunsch). Alter `bugfix/edit-tool-insert` (Self-Ref-Historie) = Pauls Verwerf-Entscheid.
+2. **Paul: User-Smokes** — R-SEL-4 (Java-Type-Selektion im Chat), R8/R9 live (erst nach Plugin-Install sichtbar), Edit-Guard (Probe-Edit mit kurzem oldString).
+3. Backlog Pauls: Compact-Input-Budget Light + Context-Noise (gemeinsam vor dem Bau), ApiRetry-Cancel-Bug (heute 3 Connect/Stream-Abbrüche = frische Evidence für open-points #ApiRetry), Linter-idPattern-Verifikation.
+4. Neue ❓ in open-points: applyEdit Not-Found-Dump cappen (GO von Paul offen) · Self-Ref-Guard-Verwerfung bestätigen.
 
-## Backlog / offene User-Entscheidungen
+## Offene Punkte
 
-- Branch `release-2026-09-06` (3 Commits, von main) — Merge = User-Entscheid (index.md).
-- Review-Agent bekommt read-only Git/Shell? (Use-Case: Diff-Isolation nach Hash — Umweg über
-  Diff-File war Workaround, open-points.md).
+- ❓ applyEdit Not-Found-Dump cappen — Paul fragen.
+- ❓ Self-Ref-Guard bewusst verworfen? — kurz bestätigen.
+- ⏳ R-SEL-4 Umsetzungsdetails (3 Eigenentscheidungen) + User-Smoke — nach Merge.
+- ❓ Linter-idPattern-Verifikation · ⏳ User-Smoke Compact-Buttons · ⏳ Jackson-2→3 · release-2026-09-06 Merge.
+
+## Was nicht neu aufgemacht wird
+
+Keine Tests auf Prompt-Inhalte · kein Overlay-ToolService (ADR-0048) · Homepage `usage/selections.md` SOT · R3 Console-Log unangetastet · kein Parameter fürs Grep-Zeilen-Cap (Konstante).
+
+## Lektionen
+
+1. Edit-Tool-Triage: erst oldString null/blank prüfen, dann Self-Reference, dann Race — 2h Stress-Jagd vs. Input-Validation-Blick.
+2. Plan-Test-Inventare per Grep über BEIDE Module verifizieren (13 statt 4 Pins — Memory #33 erneut bestätigt, Dev hat korrekt gestoppt/gemeldet).
+3. `-pl org.sterl.llmpeon.test -am` = stale-p2-Falle (jetzt in AGENTS-DEV.md, `fdaed04`).
+4. Bei LLM-Abbruch im buildWithDev: State+Commits überleben — einfach fortsetzen lassen, Dev prüft IST per Git selbst.
