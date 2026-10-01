@@ -4,9 +4,10 @@ idPrefix: DL
 
 # Docs-Linter — Use-Case-IDs gegen Testbaum abgleichen
 
-> **Status:** ✅ done (2026-09-15) — R-DL-1…16 gebaut, drei Reviews bestanden. Nachzyklus:
+> **Status:** ✅ done (2026-09-15) — R-DL-1…16 gebaut, drei Reviews bestanden. Nachzyklen:
 > `reportPath` gestrichen (echt read-only), Tool-Split `DocsIdTool`/`DocsLinterTool`, raus aus dem
-> Disk-Gate, Tool-Matrix je Agent getestet.
+> Disk-Gate, Tool-Matrix je Agent getestet; 2026-09-19 R-DL-18…20; 2026-09-21 R-DL-21/22
+> (Textblock-Belege, manuell-Marker).
 > **Ziel:** Ein falsches `✅` maschinell unmöglich machen: jeder als erledigt markierte Use-Case
 > muss durch einen Test belegt sein, der die ID des Use-Case trägt.
 
@@ -59,7 +60,9 @@ Keine Registry-Datei: **die Docs sind die Registry**, `nextIds` liest sie.
 Default-Regex: `\bUC-[A-Z]+-\d+(?:-\d+[a-z]?)*\b` — matcht flach (`UC-READTOOLS-7`) **und**
 hierarchisch (`UC-FEATURE_NAME-3-3`, Erstanwender). `idPattern` ist damit **Pflicht-Parameter, kein
 Nice-to-have**: der Request-Regex mit `+` würde unser flaches Schema still nicht finden — exakt der
-Null-Treffer-Fehlerzustand aus R-DL-6.
+Null-Treffer-Fehlerzustand aus R-DL-6. Der Parameter FULL-matcht die ID (`matches()`, kein
+Präfix-Match) — `UC-PP-\d+` findet `UC-PP-12`, aber nicht `UC-PP-12-3a`; Werkzeuge, die das
+Gegenteil erwarten, erzeugen genau den stillen 0/0 (zweimal passiert: 2026-09-16 + Da-Dok/Da-Mek).
 
 ### Doc-Template (verbindlich — der Parser ist nur so gut wie das Template)
 
@@ -86,6 +89,10 @@ Drei harte Struktur-Regeln, alles andere ist für den Parser unsichtbarer Fließ
 2. **Statusmarker am Ende** derselben Überschriftenzeile.
 3. **UC-Überschrift genau eine Ebene tiefer** als ihre Regel — daraus leitet sich die Zugehörigkeit
    und damit die Status-Vererbung (R-DL-3) ab.
+
+> **Autor-Konvention (2026-09-22, Da-Dok-Fund):** Regel-Überschrift `### R-<FEATURE>-<n>`, UC
+> `#### UC-<FEATURE>-<n>`. Ein neues Feature-Doc schreibt die Regeln von Anfang an auf `###` —
+> ein `##` erzeugt `UC_OHNE_REGEL` (Fall: tool-time-disclosure.md, Erstfassung).
 
 Das **Frontmatter-Feld `idPrefix`** deklariert das Feature-Kürzel **explizit**, statt es aus
 vorhandenen IDs abzuleiten. Begründung: ein frisches Doc ohne Regeln hätte sonst kein Kürzel, und
@@ -482,6 +489,98 @@ gemeldet (nächste IDs wären `R-FOO-1` / `UC-FOO-1`).
 #### UC-DL-33 — Ohne `prefix` listet `nextIds` alle belegten Kürzel ✅ done
 GIVEN kein `prefix`-Parameter WHEN `nextIds` läuft THEN werden alle in den Docs belegten Kürzel mit
 ihrer jeweils nächsten freien Regel- und UC-Nummer gemeldet.
+### R-DL-23 — `prefix` erlaubt Bindestriche im Präfix ✅ done (2026-09-24, `d477820`)
+
+`prefix` akzeptiert `[A-Z]+(?:-[A-Z0-9]+)*` — Bindestriche und Ziffern **innen**, nicht am Rand.
+Bestands-Präfixe (`ORD`, `CUST`, `TS`) verhalten sich unverändert. Das Splitten von `R-`/`UC-`-IDs
+in Bereich + Nummer erfolgt am **letzten** Bindestrich vor der Nummer (`R-O-TEST-1` → Bereich
+`O-TEST`, nicht `O`). Die Validierung liegt an **einer** Stelle im Core, nicht doppelt
+(Tool-Fassade + Linter hatten bislang zwei Kopien derselben Regex).
+
+> **WEIL:**
+> In vielen Projekten tragen IDs bewusst einen **Bereichs**-Anteil — `O-TEST-1`, `R-ORD-1`,
+> `D-<BEREICH>-<Nr>`. Der Bereich *ist* das Präfix, das die Nummernkreise trennt. Das Tool wies mit
+> „prefix must be uppercase letters only" solche Projekte ab, und der
+> Anwender fiel zurück auf Handvergabe per Grep — genau das, was das Tool verhindern soll.
+
+#### UC-DL-67 — Bindestrich-Präfix wird akzeptiert ✅ done
+
+GIVEN `prefix=O-TEST` WHEN `nextIds` läuft THEN wird der Aufruf **nicht** abgewiesen — die
+Präfix-Suche läuft über `O-TEST` als ganzes Kürzel.
+
+#### UC-DL-68 — Rand-Bindestrich/Kleinbuchstaben werden abgewiesen ✅ done
+
+GIVEN `prefix=OP-`, `prefix=-OP` oder `prefix=op` WHEN `nextIds` läuft THEN klarer Fehler
+(„not am Rand" bzw. uppercase only), keine stille Normalisierung.
+
+### R-DL-24 — `nextIds` schreibt die gefundene Form fort; „free" nur bei echtem Nichts ✅ done (2026-09-24, `887d301` + `2235dba`)
+
+Bei gesetztem `prefix` durchsucht `nextIds` zusätzlich zu den Definitionen der Opt-in-Docs den
+**rohen Text** aller gescannten MD-Dateien der `docRoots` nach Vorkommen von
+`<prefix>-\d+` (Wortgrenze, case-sensitiv). Gilt:
+
+1. **Vorkommen zählen als belegt** — auch reine Erwähnungen in nicht teilnehmenden Docs. Konservativ:
+   die höchste gefundene Nummer ist verbrannt, egal in welcher Form sie steht.
+2. **Die gefundene Form wird fortgeschrieben, keine Wunschform konstruiert:** höchstes Vorkommen
+   flach (`OP-79`) → Vorschlag `OP-80`; nur `R-`/`UC-`-Definitionen gefunden → wie bisher
+   `R-<pfx>-N` / `UC-<pfx>-N` (R-DL-10).
+3. **Der Vorschlag nennt die Fundstelle** (`<pfx>: highest found OP-79 in docs/offene-punkte.md →
+   next: OP-80`) — die Antwort ist prüfbar, nicht glaubwürdig.
+4. **„free" nur, wenn wirklich kein Vorkommen in irgendeiner Schreibweise gefunden wurde** — dann
+   erst `R-FOO-1` / `UC-FOO-1`.
+
+> **WEIL:**
+> `nextIds` las nur Definitionen aus Opt-in-Docs — `OP-70…OP-79` als Bullets in einer
+> nicht teilnehmenden Datei waren unsichtbar, und das Tool meldete „free, would start: R-OP-1".
+> Ein Paralleluniversum `R-OP-*` neben dem existierenden Register, oder schlimmer: `OP-80` wurde
+> zweimal vergeben. **Ein Tool, dessen Zweck Eindeutigkeit ist, darf im Zweifel nicht raten** — und
+> es ist exakt das teuerste Fehlermuster dieses Projekts (*„A tool must never lie … a false
+> negative is the most expensive bug"*, [AGENTS.md](../AGENTS.md)): Befund 1 und 2 des Reports
+> scheiterten laut, dieser lieferte eine plausibel falsche Zahl.
+>
+> **Abgrenzung zu R-DL-16:** unverändert — vergeben ist, was **gespeichert** im Doc-Bestand steht.
+> Rohvorkommen SIND gespeicherter Doc-Bestand; der Unterschied ist nur die Granularität
+> (Definition vs. Vorkommen). Erwähnungen brennen Nummern bewusst — lieber eine verbrannte Nummer
+> als eine Doppelvergabe, und die Fundstelle macht jeden Fall nachprüfbar.
+
+#### UC-DL-69 — Flaches Register wird erkannt und flach fortgeschrieben ✅ done
+
+GIVEN `OP-70…OP-79` als Bullets in einem Doc **ohne** `idPrefix` WHEN `nextIds` mit `prefix=OP`
+läuft THEN meldet es das höchste Vorkommen (`OP-79`) **mit Datei-Fundstelle** und schlägt `OP-80`
+vor — nie `R-OP-1`/`UC-OP-1`, nie „free".
+
+#### UC-DL-70 — `R-`/`UC-`-Formen verhalten sich unverändert ✅ done
+
+GIVEN Docs mit `R-READTOOLS-1..4` und `UC-READTOOLS-1..7` (Definitionen) WHEN `nextIds` mit
+`prefix=READTOOLS` läuft THEN kommt wie bisher `R-READTOOLS-5`, `UC-READTOOLS-8` (UC-DL-24).
+
+#### UC-DL-71 — Vorkommen zählen auch ohne Definition ✅ done
+
+GIVEN eine Erwähnung `UC-FOO-3` in einem nicht teilnehmenden Doc, keine Definition WHEN `nextIds`
+mit `prefix=FOO` läuft THEN ist `UC-FOO-3` belegt — Vorschlag ab `UC-FOO-4` mit Fundstelle, keine
+Wiederverwendung der Lücke.
+
+#### UC-DL-72 — „free" nur bei echtem Nichts ✅ done
+
+GIVEN `prefix=FOO` und **kein** Vorkommen von `FOO-<Nr>` in irgendeiner gescannten Datei WHEN
+`nextIds` läuft THEN erst dann meldet es `free` mit `R-FOO-1` / `UC-FOO-1` (UC-DL-26 bleibt, mit
+schärferer Vorbedingung).
+
+### R-DL-25 — `nextIds` nennt die nicht teilnehmenden Docs namentlich ✅ done (2026-09-24, `7933301`)
+
+Der `nextIds`-Rückgabewert listet — wie der Lint-Report (R-DL-11) — **jede** nicht teilnehmende
+Datei („Not participating (no idPrefix)") mit Pfad auf, nicht nur die Zählzeile.
+
+> **WEIL:** Bei einem Vergabe-Tool ist die stumme Blindstelle am
+> teuersten — genau in den nicht teilnehmenden Dateien kann die ID längst vergeben sein. R-DL-24
+> entschärft das Fachliche (Rohscan sieht die Dateien trotzdem), die Liste macht den Scan
+> nachprüfbar und kostet nur Dateinamen.
+
+#### UC-DL-73 — Skipped-Liste im `nextIds`-Output ✅ done
+
+GIVEN ein Lauf mit nicht teilnehmenden Docs WHEN `nextIds` zurückkehrt THEN listet der Output jede
+dieser Dateien mit Pfad — analog zum „Nicht teilnehmend"-Abschnitt des Lint-Reports (UC-DL-23).
+
 
 ### R-DL-16 — `nextIds` ist zustandslos; vergeben ist erst, was gespeichert im Doc steht ✅ done
 
@@ -769,6 +868,51 @@ ausschließlich im Rückgabewert (R-DL-7) — die Statuszeile bekommt nie den Vo
 GIVEN ein beliebiger Lauf WHEN `onTool` feuert THEN enthält die Zeile Doc-Anzahl und
 Befundzahl(en) — nicht nur den Methodennamen.
 
+### R-DL-21 — Java-Textblock-Belege zählen nicht ✅
+
+In `.java`-Testquellen zählt eine ID-Zeile **innerhalb eines Textblocks** (`"""` … `"""`) nicht
+als Beleg — sie ist zitierter Fixture-Inhalt, kein Beleg am Test. Zeilenbasierter Zustand: eine
+Zeile mit ungerader Anzahl von `"""` kippt den Zustand. Bewusst **nur Java**, bewusst einfach
+(kein Escaping-Handling) — die Rateübung fremder Sprach-Grammatiken bleibt verworfen (R-DL-4).
+
+> **WEIL** (realer Befund 2026-09-21): `DocsLinterToolTest.java:78` baut als Fixture eine Datei mit
+> `// UC-DL-99` — exakt der Fall, den [open-points.md](open-points.md) als ❓ „Code-Block-Regel für
+> Testquellen" zurückstellte („(a) offen bis er real auftritt"). Er ist real: der Dogfood-Lauf
+> meldet `VERWAIST UC-DL-99 DocsLinterToolTest.java:78`, weil der Linter die Textblock-Zeile als
+> Beleg am echten Test liest. Die Fixture selbst darf nicht verändert werden (der Test braucht die
+> reine ID-Zeile als Beleg **in der Fixture**) — die einzige saubere Lösung ist, Textblock-Zeilen
+> in `.java` als zitiert zu behandeln. Damit ist die ❓-Frage mit Option (b) entschieden: die eine
+> triviale Heuristik, durch einen echten Fall gerechtfertigt.
+
+#### UC-DL-64 — Textblock-ID ist kein Beleg ✅
+GIVEN eine `.java`-Testdatei mit `// UC-XY-1` innerhalb eines `"""`-Blocks WHEN gescannt THEN kein
+Beleg; GIVEN dieselbe Zeile außerhalb des Blocks THEN Beleg. *(Automatisiert:
+`TestParserTest` ×3 — im Block / außerhalb / `.java`-only-Regression.)*
+
+### R-DL-22 — „manuell verifiziert"-Marker exemprt vom UNBELEGT-Check ✅
+
+Enthält die Überschriftenzeile eines UC nach dem Statusmarker einen **Klammer-Anhang** `(…)` mit
+dem Wort `manuell` (Asterisk optional, `manuelle` matcht ebenfalls — bewusst loose, kein
+Format-Parsing), gilt der UC als **manuell belegt**: kein `UNBELEGT_ERLEDIGT`, stattdessen eine
+Info-Zeile `MANUELL` (Typ, id, `datei:zeile`) im Report — info, kein Blocker. Ein UC ✅ **ohne**
+solchen Anhang bleibt `UNBELEGT_ERLEDIGT` (hoch).
+
+> **WEIL** (2026-09-21, Paul freigibt): UC-JD-2…6 sind manuell verifiziert
+> ([ADR-0051](adr/0051-debugger-no-live-session-tests.md)) und trugen die Annotation nur als
+> menschenlesbaren Hinweis — der Linter meldete sie trotzdem als `UNBELEGT_ERLEDIGT` und blockierte
+> den Flip-Workflow mit bekanntem Rauschen. Strikt generisches Datum/Beleg-Format zu verlangen wäre
+> Parsing-Zeremonie ohne Schutzgewinn.
+
+#### UC-DL-65 — Manueller Marker exemprt ✅
+GIVEN UC ✅ mit `*(manuell verifiziert 2026-09-21, ADR-0051)*` und kein Test mit der ID WHEN
+`lintDocsAndTests` THEN kein `UNBELEGT_ERLEDIGT`, aber Info-Zeile `MANUELL` mit `datei:zeile`.
+*(Automatisiert: `DocsLinterMatchingTest.manuellMarkerExemptsDoneUcFromUnbelegtErledigt` +
+Realform-Fall ohne Asterisk + `DocsLinterFindingsFixtureTest` UC-XX-1.)*
+
+#### UC-DL-66 — Ohne Marker bleibt UNBELEGT_ERLEDIGT ✅
+GIVEN UC ✅ ohne `manuell`-Anhang und ohne Test THEN Befund `UNBELEGT_ERLEDIGT` — Regressionsschranke.
+*(Automatisiert: `DocsLinterMatchingTest.doneWithoutManuellMarkerStaysUnbelegtErledigt`.)*
+
 ## Nicht-funktional
 
 | Anforderung | Begründung |
@@ -785,8 +929,7 @@ und der wahrscheinlichste Grund, das Werkzeug nach Lauf 1 zu ignorieren. Deshalb
 
 1. Nie Build-Schranke, auch nicht später — und kein Schreibzugriff (R-DL-8).
 2. **In llmpeon wird der Bestand NICHT nachgezogen** (Q1) — Teilnahme ist Opt-in über `idPrefix`
-   (R-DL-11). Der Request sieht ein einmaliges Nachziehen vor; das gilt für FORgE als Erstanwender,
-   nicht für uns: bei uns kostet Opt-in zusätzlich den Umbau der BDDs zu Überschriften (Q6).
+   (R-DL-11). Ein einmaliges Nachziehen ist optional und kostet bei uns den Umbau der BDDs zu Überschriften (Q6).
 3. Die ID ist Pflicht bei jedem **angefassten** Use-Case — inkrementell, nie rückwirkend.
 
 **Migrationshilfe `suggestIds` (Request §7) — eigener Zyklus, Q2 🔒:** Lauf 1 erzeugt aus
@@ -811,7 +954,7 @@ Die Prompt-Dateien gehören dem PO ([prompts.md](prompts.md)); die Agenten ände
 |---|---|---|
 | Q3 | Lieferform → **🔒 nur Dateisystem-Zugriff, ein `root`-Parameter mit Default = Disk-Pfad des gewählten Projekts.** Kein `eclipse*`-Gegenstück, kein `FileTreeReader`-Interface, keine Änderung an den bestehenden Read-Tools ([ADR-0047](adr/0047-docs-linter-disk-only-single-root.md)). | 🔒 |
 | Q4 | Da Dok ist read-only, Tool schrieb einen Report → **🔒 `reportPath` ersatzlos gestrichen** (User 2026-09-15). Der Rückgabewert enthält bereits alles ungekappt; die Datei war reine Aufbereitung. Damit ist das Tool echt read-only (R-DL-7). | 🔒 |
-| Q5 | Tool-Filter je Agent → **🔒 Split in `DocsIdTool` (nur Jon) und `DocsLinterTool` (alle)** (User 2026-09-15). Der Filter wirkt tool-weit, nicht method-weit — der Split macht aus einer Sonderregel eine normale Zuordnung (R-DL-14). | 🔒 |
+| Q5 | Tool-Filter je Agent → **🔒 Split in `DocsIdTool` (nur Jon) und `DocsLinterTool` (alle)** (User 2026-09-15). Begründung korrigiert (ADR-0048, Ergänzung 2026-09-25): der Filter ist method-weit möglich; Fassade wegen Präzedenz (`PlanReadTool`) — neue Fälle: erst Filter, mit Tool-Namen als statischen Konstanten ([agent-tool-filter.md](agent-tool-filter.md) R-TF-3), Fassade nur bei echtem Ownership-Split (R-DL-14). | 🔒 |
 | Q10 | 🐞 Linter hing am `diskToolsEnabled`-Gate (Default `false`) und fehlte Jon ganz → **🔒 immer registrieren, Jon + Da Thinka bekommen ihn** (User 2026-09-15). R-DL-15, R-DL-14. | 🔒 |
 | Q1 | **Dogfooding:** llmpeon-Docs kennen keine UC-IDs (Ist: `R1`/`R2` doc-lokal, ~200 `→ Klasse.methode`-Verweise in 33 Docs). → **🔒 Tool bauen + Prompts anpassen, Bestand NICHT rückwirkend nachziehen**; ID-Pflicht ab jetzt bei jedem angefassten Use-Case (Einführung Schritt 3), Teilnahme per Opt-in (R-DL-11). | 🔒 |
 | Q2 | Migrationshilfe `suggestIds` → **🔒 separat, nach dem Grundgerüst** (User 2026-09-15). Begründung: die drei Kernmethoden sind deterministische Mengenabgleiche, `suggestIds` muss heuristisch **raten** — anderer Charakter, andere Testbarkeit. Und da Opt-in bei uns ohnehin ein Doc-Umbau ist (Q6), spart es uns weniger als dem Erstanwender. | 🔒 |
@@ -822,7 +965,6 @@ Die Prompt-Dateien gehören dem PO ([prompts.md](prompts.md)); die Agenten ände
 
 ## Herkunft
 
-Entstanden 2026-09-15 aus FORgE `OP-36` (Paul + Jon): autonomer Nachtlauf fand 15+ kaputte
-Testverweise in zwei Docs, darunter ein unbelegtes `✅` und zwei doppelt vergebene Regel-IDs.
-FORgE ist Erstanwender und hält sein Nachziehen (~20 Docs, geschätzt 50–100 kaputte Verweise)
-ausdrücklich bis zu diesem Werkzeug an.
+Entstanden 2026-09-15 aus einem autonomen Nachtlauf: dieser fand 15+ kaputte
+Testverweise in Bestands-Docs, darunter ein unbelegtes `✅` und zwei doppelt vergebene Regel-IDs.
+Das Werkzeug sichert künftige Zyklen deterministisch ab.

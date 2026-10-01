@@ -43,6 +43,7 @@ import org.sterl.llmpeon.parts.tools.AskUserTool;
 import org.sterl.llmpeon.parts.tools.EclipseGrepTool;
 import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
 import org.sterl.llmpeon.parts.tools.PlanTool;
+import org.sterl.llmpeon.parts.tools.debug.JavaDebugTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
 import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.poagent.tools.PoDelegateTool;
@@ -56,6 +57,8 @@ import org.sterl.llmpeon.tool.tools.CompactSessionTool;
 import org.sterl.llmpeon.tool.tools.DiskFileReadTool;
 import org.sterl.llmpeon.tool.tools.DiskFileWriteTool;
 import org.sterl.llmpeon.tool.tools.DiskGrepTool;
+import org.sterl.llmpeon.tool.tools.SearchAgentTool;
+import org.sterl.llmpeon.tool.tools.ShellTool;
 import org.sterl.llmpeon.tool.tools.SkillTool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -127,6 +130,63 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         } finally {
             if (otherProject.exists()) otherProject.delete(true, true, new NullProgressMonitor());
         }
+    }
+
+    // R3
+    @Test
+    public void r3ShellDefaultCwdIsActiveProject() {
+        var shell = aiService.getSharedToolService().getTool(ShellTool.class).orElseThrow();
+        var expectedCwd = Path.of(JdtUtil.diskPathOf(project)).toAbsolutePath().normalize();
+
+        var lines = shell.shellRunCommand(pwdCommand(), null, null, null, null).lines().toList();
+
+        assertEquals("first line must disclose the effective cwd: " + lines, "cwd=" + expectedCwd, lines.get(0));
+        assertEquals("must execute in the active project dir: " + lines, expectedCwd.toString(), lines.get(1));
+    }
+
+    // R3
+    @Test
+    public void r3ShellCwdFollowsProjectSwitchAtCallTime() throws Exception {
+        var otherProject = ResourcesPlugin.getWorkspace().getRoot().getProject("aaa_other");
+        if (otherProject.exists()) otherProject.delete(true, true, new NullProgressMonitor());
+        otherProject.create(new NullProgressMonitor());
+        otherProject.open(new NullProgressMonitor());
+        try {
+            var shell = aiService.getSharedToolService().getTool(ShellTool.class).orElseThrow();
+
+            aiService.setProject(otherProject);
+            var expectedOther = Path.of(JdtUtil.diskPathOf(otherProject)).toAbsolutePath().normalize();
+
+            var lines = shell.shellRunCommand(pwdCommand(), null, null, null, null).lines().toList();
+
+            assertEquals("cwd must follow setProject at call time: " + lines, "cwd=" + expectedOther, lines.get(0));
+            assertEquals("must execute in the new project dir: " + lines, expectedOther.toString(), lines.get(1));
+        } finally {
+            aiService.setProject(project);
+            if (otherProject.exists()) otherProject.delete(true, true, new NullProgressMonitor());
+        }
+    }
+
+    // R3
+    @Test
+    public void r3ShellNoProjectFallsBackToProcessCwd() {
+        try {
+            aiService.setProject(null);
+            var shell = aiService.getSharedToolService().getTool(ShellTool.class).orElseThrow();
+
+            var lines = shell.shellRunCommand("echo hi", null, null, null, null).lines().toList();
+
+            var expectedCwd = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+            assertEquals("no project -> process CWD, disclosed: " + lines, "cwd=" + expectedCwd, lines.get(0));
+            assertEquals("the command must still run: " + lines, "hi", lines.get(1));
+        } finally {
+            aiService.setProject(project);
+        }
+    }
+
+    /** prints the current working directory */
+    private static String pwdCommand() {
+        return System.getProperty("os.name").toLowerCase().contains("win") ? "cd" : "pwd";
     }
 
     @Test
@@ -788,6 +848,118 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertTrue("Jon needs lintDocs", names.contains("lintDocs"));
         assertTrue("Jon needs lintDocsAndTests", names.contains("lintDocsAndTests"));
         assertTrue("Jon needs nextIds", names.contains("nextIds"));
+    }
+
+    // --- Agent-Tool-Filter matrix (docs/agent-tool-filter.md) ----------------
+
+    // UC-TF-1
+    // UC-TF-4
+    @Test
+    public void daDokMatrixKeepsShellAndWorkTools() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var standalone = aiService.getAgent(AiReviewAgent.NAME).orElseThrow();
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        var slave = jonDelegate().getReviewSlave();
+
+        for (var dok : List.of(standalone, slave)) {
+            var names = activeToolNames(dok);
+            assertTrue("Da Dok needs " + ShellTool.OPERATION_SYSTEM_INFORMATION,
+                    names.contains(ShellTool.OPERATION_SYSTEM_INFORMATION));
+            assertTrue("Da Dok needs " + ShellTool.SHELL_RUN_COMMAND,
+                    names.contains(ShellTool.SHELL_RUN_COMMAND));
+            for (String workTool : List.of("eclipseRunJavaTests", "eclipseReadProjectProblems",
+                    "eclipseBuildProject", "lintDocs", "lintDocsAndTests")) {
+                assertTrue("Da Dok needs " + workTool, names.contains(workTool));
+            }
+            long activePlanMethods = dok.getToolService().getExecutors().stream()
+                    .filter(e -> e.getTool() instanceof PlanTool)
+                    .filter(dok::isToolActive)
+                    .count();
+            assertEquals("Da Dok keeps all 4 plan* methods", 4, activePlanMethods);
+        }
+
+        // R-TF-2: Da Thinka / Da Mek plan*-visibility unchanged — all 4 plan* methods stay active.
+        for (var agent : List.of(aiService.getAgent(AiPlanAgent.NAME).orElseThrow(),
+                aiService.getAgent(AiDevAgent.NAME).orElseThrow())) {
+            long activePlanMethods = agent.getToolService().getExecutors().stream()
+                    .filter(e -> e.getTool() instanceof PlanTool)
+                    .filter(agent::isToolActive)
+                    .count();
+            assertEquals(agent.getName() + " keeps all 4 plan* methods", 4, activePlanMethods);
+        }
+    }
+
+    // UC-TF-2
+    @Test
+    public void daDokMatrixNeverPrivileged() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var standalone = aiService.getAgent(AiReviewAgent.NAME).orElseThrow();
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        var slave = jonDelegate().getReviewSlave();
+
+        // RAM-Slave (noPrivilegedTools): never sees a privileged tool — memory curation stays with Jon.
+        for (var exec : slave.getToolService().getExecutors()) {
+            boolean privileged = exec.getTool() instanceof EclipseWorkspaceWriteFileTool
+                    || exec.getTool() instanceof DiskFileWriteTool
+                    || exec.getTool() instanceof JavaDebugTool
+                    || exec.getTool() instanceof AskUserTool
+                    || exec.getTool() instanceof WorkspaceMemoryTool
+                    || exec.getTool() instanceof DocsIdTool;
+            if (privileged) {
+                assertFalse("Slave Da Dok must never see " + exec.getSpec().name(),
+                        slave.isToolActive(exec));
+            }
+        }
+
+        // Standalone-Peon-Review: keeps memory* like all standalone agents (no new mechanism);
+        // still never sees write tools, debug or nextIds.
+        for (var exec : standalone.getToolService().getExecutors()) {
+            boolean privileged = exec.getTool() instanceof EclipseWorkspaceWriteFileTool
+                    || exec.getTool() instanceof DiskFileWriteTool
+                    || exec.getTool() instanceof JavaDebugTool
+                    || exec.getTool() instanceof DocsIdTool;
+            if (privileged) {
+                assertFalse("Standalone Da Dok must never see " + exec.getSpec().name(),
+                        standalone.isToolActive(exec));
+            }
+        }
+        var standaloneNames = activeToolNames(standalone);
+        for (String memoryMethod : List.of("memoryAdd", "memoryRemove", "memoryReplace", "memoryReset")) {
+            assertTrue("Standalone Da Dok keeps " + memoryMethod, standaloneNames.contains(memoryMethod));
+        }
+
+        // askUser only exists in the graph when a question presenter is set (empty = unset) —
+        // the standalone must keep it visible.
+        var uiService = newServiceWithPresenter((question, answers, onAnswer) -> { });
+        var uiStandalone = uiService.getAgent(AiReviewAgent.NAME).orElseThrow();
+        assertTrue("Standalone Da Dok keeps askUser",
+                activeToolNames(uiStandalone).contains("askUser"));
+    }
+
+    // UC-TF-3
+    @Test
+    public void searchAgentFilterHidesPlanTools() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var shared = aiService.getSharedToolService();
+        var searchAgent = shared.getTool(SearchAgentTool.class).orElseThrow();
+
+        var planExecutors = shared.getExecutors().stream()
+                .filter(e -> e.getTool() instanceof PlanTool)
+                .toList();
+        assertEquals("shared service carries all 4 plan* methods", 4, planExecutors.size());
+        for (var exec : planExecutors) {
+            assertFalse("SearchAgent must not see " + exec.getSpec().name(),
+                    searchAgent.getFilter().test(exec));
+        }
+
+        var grep = shared.getExecutors().stream()
+                .filter(e -> e.getSpec().name().equals("eclipseGrepFiles"))
+                .findFirst()
+                .orElseThrow();
+        assertTrue("SearchAgent keeps read tools", searchAgent.getFilter().test(grep));
     }
 
     /**

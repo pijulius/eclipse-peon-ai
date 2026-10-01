@@ -13,8 +13,53 @@ public class AiReponseBuilder {
     public static final int MAX_GREP_FILES = 100;
     public static final int MAX_GREP_LINES = 100;
 
+    public static final int MAX_BUILD_MARKERS = 100;
+
+    /**
+     * R-OD-5: renders build marker lines (all errors first, then warnings), capped at
+     * {@code cap} lines total. {@code cap <= 0} means unlimited. The cap is disclosed only
+     * when {@code total > cap} (exactly at the cap nothing was cropped): blank line +
+     * "showing &lt;cap&gt; of &lt;total&gt; markers".
+     */
+    public static String buildMarkers(List<String> errors, List<String> warnings, int cap) {
+        int total = errors.size() + warnings.size();
+        int shown = cap > 0 ? Math.min(total, cap) : total;
+        var result = new StringBuilder();
+        int printed = 0;
+        for (String line : errors) {
+            if (printed >= shown) break;
+            result.append(line).append(System.lineSeparator());
+            printed++;
+        }
+        for (String line : warnings) {
+            if (printed >= shown) break;
+            result.append(line).append(System.lineSeparator());
+            printed++;
+        }
+        if (cap > 0 && total > cap) {
+            result.append(System.lineSeparator())
+                  .append("showing " + cap + " of " + total + " markers");
+        }
+        return result.toString();
+    }
+
+
     public static String searchComplete(List<String> results) {
         return searchComplete(results, null);
+    }
+
+    /**
+     * R-OD: discloses a reached result cap ("capped at N — narrow your search") — a tool must
+     * never lie about a limit. Trigger is {@code >=}: exactly at the limit the result is already
+     * cropped. {@code limit <= 0} means unlimited → no disclosure.
+     */
+    public static String searchComplete(List<String> results, int limit, String suffix) {
+        if (limit > 0 && results.size() >= limit) {
+            suffix = suffix == null
+                    ? "capped at " + limit + " — narrow your search"
+                    : suffix + System.lineSeparator() + "capped at " + limit + " — narrow your search";
+        }
+        return searchComplete(results, suffix);
     }
     public static String grepComplete(List<String> results, String suffix) {
         var result = new StringBuilder();

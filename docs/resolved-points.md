@@ -4,6 +4,8 @@ Geklärte Punkte, die in kein Feature-Doc passen. Offene Punkte: [open-points.md
 
 | Punkt | Entscheidung | Begründung | Datum |
 |---|---|---|---|
+| Widget-vs-Store-Stale-Reads (R-ML2) | Neu entschieden: Ping/Reload lesen Live-Widget-Werte, Reload persistiert nicht (Apply/Cancel unverändert); Umsetzung als `ModelConfigWidget` (Provider/URL/Key/Think + Model-Combo + Ping + Reload), JSON extra body bleibt außerhalb; Ping bleibt Host+Port | „Es hilft uns nichts, wenn ich die Eingabe mache und erst die Config-Seite verlassen muss, um das Modell zu testen" — Store-Read-Asymmetrie zum Check-Host war ein bewusster Entscheid von 2026-09-12, der sich in der Praxis als unbenutzbar erwies; mehrere fokussierte Widgets statt einem alles fressenden Block. Details: [model-config-widget.md](model-config-widget.md) + [ADR-0060](adr/0060-model-config-widget-live-widget-reads.md) | 2026-09-28 |
+|---|---|---|---|
 | `eclipseReadFile` kürzt lange Ausgaben still (Dev-Befund) | **Widerlegt** — kein Zeilen-Cap, R1d in [eclipse-read-tools.md](eclipse-read-tools.md) zurückgezogen | Pfadanalyse `FileLines` → `DefaultToolExecutor` → `SmartToolExecutor` → `ToolService.execute` → `ThreadSafeMemory.addResult` → `ToolLoopRequest.call` → `StreamingBridge`: nirgends wird gekappt. `ChatMessageUtil`-Limits (6000/90000/900000) dienen Logging/Dedup/Token-Schätzung; `SmartToolExecutor:60-62` kürzt nur Anzeigetext. Beobachtet wurde R1a/R1b. | 2026-09-03 |
 | „Loading 📋 Static env info" erscheint häufig nach Tool-Calls — System-Prompt-Bug? | **Kein Bug.** Kein Rebuild pro Tool-Iteration, Prompt-Cache bricht nicht | `ToolService.executeLoop` ruft `buildSystemPrompt()` nie; Static-Context enthält nur `LocalDate.now()`, keinen Timestamp/Projekt/Zähler. Die Meldungen stammen von **verschiedenen Agenten** (je eigener Cache) und echten Invalidierungen (`clear`/`compact`/`setStaticContext`/`updateConfig`). Sichtbar erst seit inc-27 (Agentenname in der Meldung). Rest-Befunde (doppelter Aufruf `AbstractAgent:179`, fehlende `count == 1`-Assertion) → Zyklus 2a. | 2026-09-03 |
 | Gewähltes Projekt im Static Context? Bekommen Da Mek/Da Thinka es? | **Wie gewollt** — Projekt ist Turn-Context, nicht System-Prompt; Sklaven bekommen es bewusst nicht | `AgentContextComponent:136-140` → `UserContext:20-44` (aktiver Agent). `initStaticContext` fügt nur `StaticContextItem` hinzu; `BuildPoAgentComponent:99-112` gibt den Sklaven Plan + agentenspezifische AGENTS.md + Workspace-Memory, kein Selected-Project-Block. Entspricht `issues/fact-issues.md` Punkt 0b. | 2026-09-03 |
@@ -21,3 +23,58 @@ Geklärte Punkte, die in kein Feature-Doc passen. Offene Punkte: [open-points.md
 | AgentOrder: doppelt matchende Patterns still verworfen (Triage Bug 5) | **Verhalten bleibt (a), Sichtbarkeit kommt** — first-wins ist gewollt; Fix = `log.warn` nennt die übergehende Zeile. **R4** in [agent-ordering.md](agent-ordering.md) ❌ specified | User 2026-09-11: „ich bin wie du bei (a) und docs pflegen dazu." Kein Verhaltens-Change im Cleanup-Zyklus, nur silent-discard weg. | 2026-09-11 |
 | `diskReadFile` scheitert an workspace-qualifizierten Pfaden, wenn Projektname ≠ Disk-Ordnername | **Kein Code-Fix** — Empfehlung „Eclipse-Projektname = Disk-Ordnername", dokumentiert auf der Homepage. Keine Auto-Übersetzung `/project/path` → Disk in den `disk*`-Tools | Realfall 2026-09-16 (Kimi): `diskReadFile("/llmpeon-parent/docs/docs-linter.md")` bei Disk-Pfad `…/eclipse-peon-ai`. `FileUtils.resolve:78-88` nimmt einen absoluten Pfad nur, wenn er **existiert**, sonst `workingDir.resolve(...)` → hängt ihn an den Disk-Root (`…/eclipse-peon-ai/llmpeon-parent/docs/…`). Beides weg → `File not found: <x> also not in <workingDir>` (`DiskFileReadTool.java:54`). **Warum keine Übersetzung:** (1) echte Mehrdeutigkeit — heißt ein Projekt `docs` oder `tmp`, ist `/docs/x.md` gleichzeitig gültiger Disk- und Eclipse-Pfad, die Übersetzung müsste raten; (2) der `WriteValidator` arbeitet auf dem normalisierten Pfad, eine Schicht davor verschiebt die Sicherheitsgrenze; (3) es verwischt die Familien-Trennung, die `QualifiedPathValidator` bei Copy/Rename gerade hergestellt hat. Das LLM hat die Information ohnehin: `projectInfo` nennt in **jedem** Turn Projektname, Eclipse-Pfad und Disk-Pfad (`EclipseUtil.java:346-358`) — hier hat das Modell sie ignoriert, kein Werkzeugfehler. | 2026-09-16 |
 | `PoDelegateTool.compact()` meldet trotz R16-Skip „compacted." (Da-Dok-Fund) | **Gefixt** — R16-Schärfung (`16e9e47`): Boolean-Return wird gelesen, Skip → `"Nothing to compact (N messages)"`; gemeinsam mit Guard < 2 → < 3 (Re-Compact = Noop), [po-agent-jon.md](po-agent-jon.md) R16 | Beides dieselbe Ehrlichkeits-Lücke am selben Choke-Point; User 2026-09-15: „einverstanden". Da-Dok-Review ACCEPTED. | 2026-09-15 |
+
+## Tool-Evolution-Run — CR-Verdicts (2026-09-19, Paul) · Zusammfassung nach Auflösung
+
+Ausgangspunkt: Vergleich unseres Plugins gegen das externe Copilot-Eclipse-Plugin (Nacht-Zyklus 2026-09-19,
+Plan `/github-copilot-for-eclipse/peon-plan/overview.md` — auf unseren Projekt-Peon-Plan verschoben).
+Alle CR-Items im PO-Run entschieden; die ursprüngliche Sammelstelle (tool-evolution.md) und die externe
+Mapping-Datei (feature-change-request-copilot.md) wurden aufgelöst. Verbleibende SOLL-Docs: ❌
+[project-problems-tool.md](project-problems-tool.md), [java-debugger-tool.md](java-debugger-tool.md),
+[tool-output-disclosure.md](tool-output-disclosure.md), [web-tools.md](web-tools.md) · ⏳ geparkt
+[terminal-session-tool.md](terminal-session-tool.md) (Revisit mit async-agent-tools-proposal, Option C),
+[tool-confirmation.md](tool-confirmation.md).
+
+- **CR-1 (create_file), CR-2 (Whole-File-Regen), CR-7 (Change-Review-UI/Undo/WorkingSetBar) — abgelehnt.**
+  Begründung (Paul): Agent-basiertes System + Git/PR-Workflow (V2 als eigener Service mit PRs) deckt
+  Review/Undo; Whole-File deckt `diskWriteFile`/`eclipseWriteFile` ohnehin ab; Delta-Edit (Edit-Guard) ist
+  besser; Extra-UI = Ballast (L). Revisit-Trigger: Nicht-Git-Workspaces werden realer Use-Case.
+- **CR-3 — angenommen:** Datei- + Severity-Filter auf `eclipseReadProjectProblems`, projektweite Lesung bleibt unverändert.
+- **CR-4 — angenommen (angepasst):** Debugger-Tool für Da Mek, lesend + ändernd, keine Confirmations, weil
+  die Debug-Session User-Property ist (User startet/managt sie, Agent unterstützt).
+- **CR-5 (persistente/Background-Terminal-Session) — geparkt, nicht verworfen:** Tools sind synchron;
+  Background braucht Async-Tool-Infrastruktur (async-agent-tools-proposal Option C); Shell bleibt One-shot.
+- **CR-6 (Tool-Confirmation) — geparkt:** Paul nutzt Bestätigungen nie (immer aus); Bedarf erst mit CR-4/CR-5.
+- **CR-17/18/19 — angenommen:** Caps ehrlich (Search-Cap 1000→**500**); webFetch statt byte-Cap paginiert.
+- **CR-20 — angenommen:** neues `webGet(url, path)` (eigenes Tool, isEditTool, kein Size-Limit).
+- **CR-8–16 — Nein:** unsere Read/Search/Nav/Docs/Orchestration/Memory/Skills/Build/MCP-Familien = Vorsprung.
+- **Decompiler Language-Server — kein Nutzen** (nativ gebündelt, nicht decompilierbar; Logik bewusst anders;
+  IP-Gründe).
+
+## Weitere geklärte Punkte (2026-09-24 aus open-points.md konsolidiert)
+
+| Punkt | Entscheidung | Begründung | Datum |
+|---|---|---|---|
+|---|---|---|---|
+| Debugger-Backlog F2: statische Felder + evaluate-Objektwerte | **Specified** — SOLL jetzt R-JD-9 (UC-JD-10/11) in [java-debugger-tool.md](java-debugger-tool.md), Bau im Debugger+Linter-Mini-Zyklus | Paul „Go" 2026-09-21 | 2026-09-21 |
+| Debugger Exception-Suspend | **Specified** — R-JD-10 (UC-JD-12), `get_exception`-Action; Event-Abfrage verworfen (R-JD-3) | Paul „Go" 2026-09-21 | 2026-09-21 |
+| Docs-Linter „manuell verifiziert"-Marker | **Specified** — R-DL-22 (UC-DL-65/66) in [docs-linter.md](docs-linter.md) | Paul „Go" 2026-09-21 | 2026-09-21 |
+| Self-Reference-Guard aus `bugfix/edit-tool-insert` | **Bewusst NICHT übernommen** — Selbstwachstum ist Agenten-Absicht; Edit-Guard (`7800a56`) deckt die teure Klasse | Paul bestätigt 2026-09-19; Guard liegt fertig auf `bugfix/edit-tool-insert` (`a3e8ce1`) falls wieder gebraucht | 2026-09-19 |
+| Merge `release-2026-09-06` → main | **Erledigt** — Squash-PR #132 (`45f2a0d2`), Content war vollständig auf dem Branch; ebenso `fix/compact-slot-model` via #140 | Konsolidierung Paul 2026-09-19; No-Op-Merges vermieden | 2026-09-19 |
+| SimpleDiff LCS-OOM bei großen Dateien | **Gelöst** — Guard `MAX_LCS_CELLS` + Common-Trim + `MAX_DIFF_LINES` (`2e51a16`, Nachfassung `a2abace` auf `fix/simple-diff`, in main) | 4 Tests + Crash-Shape-Abdeckung | 2026-09-16/23 |
+| User-Context-Selection-Regression | **Gelöst** — R-SEL-1…3 (`5ceb3aa`/`c958d78`); Setter-Reihenfolge nur per User-Smoke prüfbar | SOLL in [user-context.md](user-context.md) | 2026-09-16 |
+| Docs-Linter liest Code-Block-Überschriften als Definitionen | **Gelöst** — R-DL-13 (Fenced Code Blocks übersprungen, `797670c`/`43d4ff8`) | Dogfooding-Fund, Linter reportete False Positives | 2026-09-15 |
+| Code-Block-Regel für Testquellen (VERWAIST-Fehlalarm) | **Entschieden** — R-DL-21 Option (b) in [docs-linter.md](docs-linter.md) | Realfall `DocsLinterToolTest:78` | 2026-09-21 |
+| DL-Tests ohne ID-Kommentare (37 Altbestand) | **Bewusst offen als eigener Sweep** — ✅s sind legitim (Implementierung nachweislich getestet, nur Annotation fehlt); Empfehlung: eigener Mini-Zyklus, nicht im Feature-Zyklus | Linter meldet korrekt; zu groß für einen Feature-Abschluss | 2026-09-15 |
+| 8 rote Compact-/TurnContext-Tests in `PeonAiServiceTest` | **Gelöst** — keine Bugs, veraltete Seeds (2 Messages vs. R16-Guard < 3); Seeds auf 1U+2A umgestellt | Da-Mek-Kausalanalyse (`9ed839b` vs `d94e8e9`) | 2026-09-16 |
+| `eclipseReplaceLines`/`diskReplaceLines` Insert-Korruption | **Gelöst** — Root-Cause = leerer/blanker oldString (`String.replace("", x)`); Edit-Guard min. 3 Non-WS (`7800a56`), alle 3 Oberflächen, 5 Mutation-Nachweise rot | Stress-Jagden fanden kein sporadisches Reprokt im Replace selbst | 2026-09-19 |
+| Docs-Linter `idPattern` 0/0 bei workspace-Pfaden | **Entschieden** — Wurzel = Root-Handling, → R-DL-18 (Root-Fallback), gebaut im Mini-Zyklus `bugfix/linter-root-fallback` | Paul 2026-09-16 | 2026-09-16 |
+| `nextIds` reserviert nicht / Neustart | **Gebaut** — Zustandslosigkeit bleibt (R-DL-16 + UC-DL-56/57), Ablauf in po.md; Mehrwert erst durch R-DL-17 | `934ea7c`/`ab71c53`, Paul bestätigt | 2026-09-15/16 |
+| `applyEdit` not-found dumpet das gesamte File | **Bewusst so** — kein Bau; Dump spart den Read-Roundtrip im Fehlerfall | Paul 2026-09-19: gute Lösung (Kontext-Fenster um die ähnlichste Fundstelle) existiert nicht; Roundtrip-vs-Context-Bombe bleibt offen, bleibt stehen bis ein Realfall kommt | 2026-09-19 (aus open-points konsolidiert 2026-09-26) |
+| Fallback-Hint („cannot be compacted") ohne Once-only-Guard — Spam je Tool-Iteration (Bug A) | **Gelöst** — Paul baute den Guard (`agent == null || !hasCompactTool` → Fallback), Ersteinbau war invertiert (`containsMessage(msg)` ohne `!` — Message kam nie an); Da Mek fixte die Negation + Test `fallbackHintIsAddedOnce` (`8fb7baf`) | `ToolService.java:220`, R-CC-15-Kontext (compact.md) | 2026-09-27 |
+| Think: leeres Dropdown = unset, nichts senden (alle Provider) statt think:false | **Entschieden (Paul, Option A)** — Off-Tokens (`false`/`FALSE`/`none`/`no`/`off`, case-insensitive) = explizites off; Ollama-Items `""`/`true`/`false` | „Empty means unset"-Regel; Abschalten nur explizit — Issue #149 | 2026-09-27 |
+| Think: `think_supported` fliegt komplett raus (auch Custom-Agent-Frontmatter) | **Entschieden (Paul)** — abgeleitet wird nur aus dem Think-Level; Legacy leskompatibel (on > off > support), migrate-on-write zu `think`; Basis-Checkbox „supports thinking" ebenfalls raus | Reporter-Verwirrung „supports vs. wants"; ein String, eine Kontrolle | 2026-09-27 |
+| Legacy `think_supported: false` + `think_on_string: high` | **Jon (autonom)** — on-string gewinnt → `"high"` (konkreter Level = spezifischere User-Intent) | Thinka-Empfehlung akzeptiert | 2026-09-27 |
+| LM Studio Off-Tokens | **Jon (autonom)** — alle Off-Tokens → `reasoning=off`, generic-on → `reasoning=on` (vorher: nur `"false"`, Rest verbatim) | Konsistenz mit Ollama-Regel; Verhaltensänderung dokumentiert | 2026-09-27 |
+| Rot-erst-Strategie bei UI-Kollaps-Bug | **Jon (autonom)** — Inc-1: grüner Roundtrip-Schutz + gepinnter IST-Kollaps-Test; Inc-2: echter Umschalt-Regressor (`issue149_falseSurvivesUiEncodeAndPersistence`) | Kollaps liegt in UI-Kodierung, Saver/Loader waren korrekt — „je Inkrement grün" hält | 2026-09-27 |
+| Provider-Think-Audit-Befunde B1–B5 | **Jon (autonom)** — B1 Copilot `returnThinking(true)` gefixt (echter Bug, Parität zu OpenAI); B2/B3 toter Alt-Semantik-Code (`toOnOff`/`toBoolean`/`resolveOff`) gelöscht; B4/B5 Javadocs auf ADR-0059; B6 E2E-Legacy-`false` ergänzt | Da-Dok-Audit, CONCERNS; alles in Inc-4 (`4a7bbc84`/`f4a80592`) | 2026-09-27 |

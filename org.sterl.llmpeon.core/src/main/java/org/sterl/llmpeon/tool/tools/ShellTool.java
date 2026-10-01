@@ -10,9 +10,11 @@ import java.nio.file.Path;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import org.sterl.llmpeon.shared.ArgsUtil;
+import org.sterl.llmpeon.shared.CallStats;
 import org.sterl.llmpeon.shared.SearchQuery;
 
 import dev.langchain4j.agent.tool.P;
@@ -22,6 +24,9 @@ import dev.langchain4j.agent.tool.Tool;
  * Executes shell commands (e.g. maven, git, npm) with timeout support.
  */
 public class ShellTool extends AbstractTool {
+
+    public static final String OPERATION_SYSTEM_INFORMATION = "readOperationSystemInformation";
+    public static final String SHELL_RUN_COMMAND = "shellRunCommand";
 
     @FunctionalInterface
     public interface ShellConfirmationProvider {
@@ -35,6 +40,7 @@ public class ShellTool extends AbstractTool {
     private static volatile UserToolEnvironment userToolEnvironment;
 
     private ShellConfirmationProvider confirmationProvider = null;
+    private Supplier<Path> defaultWorkingDir = null; // set at construction, before first use (same as confirmationProvider)
 
     @Override
     public boolean isEditTool() { return true; }
@@ -43,7 +49,13 @@ public class ShellTool extends AbstractTool {
         this.confirmationProvider = confirmationProvider;
     }
 
-    @Tool("Read OS and environment info: name, Java version, user home, PATH, temp dir.")
+    /** R3 (shell-tool.md): supplies the default working directory at call time (active project);
+     *  null or a null result = fall back to the process CWD (".") as before. */
+    public void setDefaultWorkingDir(Supplier<Path> defaultWorkingDir) {
+        this.defaultWorkingDir = defaultWorkingDir;
+    }
+
+    @Tool(name = OPERATION_SYSTEM_INFORMATION, value = "Read OS and environment info: name, Java version, user home, PATH, temp dir.")
     public String readOperationSystemInformation() {
         return "java.version: " + System.getProperty("java.version")
             + "\nos.name: " + System.getProperty("os.name")
@@ -55,7 +67,7 @@ public class ShellTool extends AbstractTool {
             + "\ntmpdir: " + System.getProperty("java.io.tmpdir");
     }
 
-    @Tool("Run a shell command (mvn, npm, git). Not for file I/O — use read/write tools.")
+    @Tool(name = SHELL_RUN_COMMAND, value = "Run a shell command (mvn, npm, git). Not for file I/O — use read/write tools.")
     public String shellRunCommand(
             @P(description = "shell command", name = "command") 
             String command,
@@ -70,7 +82,11 @@ public class ShellTool extends AbstractTool {
 
         ArgsUtil.requireNonBlank(command, "command");
         if (timeout == null) timeout = DEFAULT_TIMEOUT_S;
-        if (workingDirectory == null) workingDirectory = Path.of(".").toAbsolutePath().toString();
+        if (workingDirectory == null) {
+            // R3: default = supplier (active project) at call time; no supplier/no project = process CWD
+            Path defaultDir = defaultWorkingDir != null ? defaultWorkingDir.get() : null;
+            workingDirectory = (defaultDir != null ? defaultDir : Path.of(".")).toAbsolutePath().toString();
+        }
         if (tailLines == null) tailLines = DEFAULT_TAIL_LINES;
 
 
@@ -89,6 +105,8 @@ public class ShellTool extends AbstractTool {
         if (!effectiveDir.toFile().isDirectory()) {
             throw new IllegalArgumentException("workingDirectory is not a valid directory: " + workingDirectory);
         }
+        // R3: disclose the effective (absolute + normalized) working dir — first line of every run result
+        String cwdPrefix = "cwd=" + effectiveDir + System.lineSeparator();
 
         String[] shellCommand;
         String os = System.getProperty("os.name").toLowerCase();
@@ -112,6 +130,7 @@ public class ShellTool extends AbstractTool {
             // ensure we have set Xmx for mvn as it is very slow otherwise ...
             if (command.contains("mvn")) pb.environment().putIfAbsent("MAVEN_OPTS", "-Xmx4g");
             pb.redirectErrorStream(true); // merge stderr into stdout
+            var stats = CallStats.start();
             var process = pb.start();
 
             Thread reader = new Thread(() -> {
@@ -146,7 +165,8 @@ public class ShellTool extends AbstractTool {
                     partial = formatOutput(lines, filter, tailLines).text();
                 }
                 onTool("Command timed out (exit killed) - " + (lines.isEmpty() ? "no output" : lines.size() + " lines captured"));
-                return "Command timed out after " + timeout + "s. Partial output:\n" + partial;
+                return cwdPrefix + "Command timed out after " + stats.duration()
+                    + ". Partial output:\n" + partial + System.lineSeparator() + stats.suffix();
             }
 
             reader.join(2000);
@@ -159,17 +179,20 @@ public class ShellTool extends AbstractTool {
             }
             onTool("Command finished (exit " + exitCode + ") reading " 
                     + output.shown() + " lines ...");
-            return resultStr;
+            if (resultStr.isEmpty()) {
+                return cwdPrefix + stats.suffix();
+            }
+            return cwdPrefix + resultStr + System.lineSeparator() + stats.suffix();
 
         } catch (IOException e) {
             onProblem("Failed to run: " + command + " " + e.getMessage());
-            return "Error executing command: " + e.getMessage()
+            return cwdPrefix + "Error executing command: " + e.getMessage()
                 + System.lineSeparator() + "Output so far:" + System.lineSeparator()
                 + formatOutput(lines, filter, tailLines).text();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             onTool("Stopped " + command);
-            return "Command interrupted: " + e.getMessage()
+            return cwdPrefix + "Command interrupted: " + e.getMessage()
                 + System.lineSeparator() + "Output so far:" + System.lineSeparator()
                 + formatOutput(lines, filter, tailLines).text();
         }

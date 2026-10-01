@@ -1,39 +1,41 @@
-# Session-Stand — 2026-09-19
+# Session-Stand — 2026-09-30 (Cleanup + Push, Paul-Smoke ✅)
 
-## Wo wir stehen
+> Achtung: docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts
+> im Chat, Jon schreibt. (Da Mek hatte 2026-09-27 memory.md überschrieben — nicht wiederholen.)
 
-**Branch `bugfix/user-context-selection`, Zyklus „Edit-Guard + Lint-Polish + Read-Zeilennummern" KOMPLETT:**
-- Step-0: Pauls Count-Guard + onTool + 5 SOLL-Docs committed
-- `7800a56` Inc 1 Edit-Guard (oldString Pflicht, `trim().length() >= 3`, up-front in `FileUtils.applyEdit`, alle 3 Oberflächen; null→"" entfernt) — Core 875/0, Plugin 222/0
-- `15e3eab` Inc 2 Lint-Polish (R-DL-19 `Sources:`-Zeile relativ, R-DL-20 onTool-Statuszeile, UC-DL-62/63 belegt) — Core 880/0 (Worktree-verifiziert)
-- `e0538fa` Inc 3 R9 (Ganzdatei MIT Zeilennummern, supersedet R1c-Klausel) + R8 (Grep = Trefferzeilen `pfad:42: text` unpadded, MAX_GREP_LINES=100 + Disclosure, per-File-Counts weg, Clean Break) — Core 884/0, Plugin 223/0
-- `fdaed04` AGENTS-DEV: `-pl test -am` zieht Host NICHT in Reaktor → `-pl org.sterl.llmpeon,org.sterl.llmpeon.test -am verify`
-- `73bb156` Review-Fixes (staler Timeout-Wrapper umbenannt, unused `effectiveRoot` weg)
-- **Review: CONCERNS → gelöst, abgenommen. Plan archiviert (`planImplemented`).** Docs ✅: Edit-Guard, R-DL-19/20, R8/R9. Lint: UC-DL-62/63 belegt, 0 neue Befunde (42 UNBELEGT_ERLEDIGT = vorbestehender Bestand).
+## AKTUELL 2026-09-30: Post-Smoke-Cleanup (Paul-Order)
 
-**Da Mek IST gecompacted (21%).**
+Paul: „smoke war erfolgreich — docs saubermachen und alles pushen — alte pläne löschen — release
+notes in english schreiben."
+
+1. **Paul-Smoke ✅ 2026-09-30** für alle 5 Zyklen (R-DEF-9…11, R-THINK-11/12, Default-Inheritance,
+   Model Config Widget, Issue #149) — in Docs markiert: index.md (4 Stellen), per-agent-think.md
+   (R-THINK-4/5), model-config-widget.md, compact.md (R-CC-15), user-context.md,
+   open-points.md (Issue-#149-Punkt 🔒).
+2. **8 Plan-Archive gelöscht** (peon-plan/overview-done-2026-09-26…09-30) — peon-plan/ leer.
+3. **CHANGELOG.md (Englisch) im Repo-Root angelegt** — Paul-Entscheidung: Repo-Root, nächste
+   Version **2.12.4** (Letzter Tag: 2.12.3, 43 Commits seitdem: Think 14, Model-Config/Inheritance
+   21, Housekeeping 8). Keep-a-Changelog-Stil; ältere Releases → GitHub Releases verlinkt.
+4. **Push:** story/issue-149-think (war nur inc-6 `d77ea570` ahead auf origin) — Mek committet
+   CHANGELOG.md + docs/** + peon-plan-Löschungen, dann `git push`. **Merge nach main = Paul**
+   (nicht angeordnet, nicht machen). `release-2026-09-06` existiert nicht mehr (lokal+remote weg).
+   `homepage/.vitepress/dist` ist NICHT tracked — kein stale-Dist-Problem. Keine Stashes.
 
 ## Nächste Schritte
 
-1. **Paul: Merge/Squash** `bugfix/user-context-selection` → main (enthält R-SEL-4 + R-DL-18 + diesen Zyklus — EIN Branch nach Pauls Wunsch). Alter `bugfix/edit-tool-insert` (Self-Ref-Historie) = Pauls Verwerf-Entscheid.
-2. **Paul: User-Smokes** — R-SEL-4 (Java-Type-Selektion im Chat), R8/R9 live (erst nach Plugin-Install sichtbar), Edit-Guard (Probe-Edit mit kurzem oldString).
-3. Backlog Pauls: Compact-Input-Budget Light + Context-Noise (gemeinsam vor dem Bau), ApiRetry-Cancel-Bug (heute 3 Connect/Stream-Abbrüche = frische Evidence für open-points #ApiRetry), Linter-idPattern-Verifikation.
-4. Neue ❓ in open-points: applyEdit Not-Found-Dump cappen (GO von Paul offen) · Self-Ref-Guard-Verwerfung bestätigen.
+1. **Mek:** Commit (CHANGELOG.md, docs/**, peon-plan-Del) + Push → dann dieser Stand ok.
+2. **Merge nach main** = Pauls Entscheidung (Ansage offen).
+3. **Danach (Paul-Order): Context-Overflow/ContentProvider-Bug-Zyklus** — Thinka 954k nach
+   clearPlan (per-Request-Injektion, nicht Agent-Memory), Mek 431005 vs. n_ctx 170240, webFetch
+   „Reading https://…" = 500k. Evidenz: open-points.md ❓ auto-compact-Eintrag. Logs nur mit
+   searchAgent lesen (runtime-EclipseApplication/.metadata/.log, GROSS).
+4. Backlog: AGENTS-Trim (wartet Paul-GO, inkl. toter „komponenten-architektur"-Skill-Link in
+   AGENTS.md:43) · Scaffold-als-Jon-Delegat (SOLL-Gespräch offen) · TrimService-Story (⏳) ·
+   R-CC-7 · Think-BDD-Lücken (a)–(g) · per-Agent-Provider-Override (❓) · Linter ☠️-Status (❓) ·
+   ApiRetry (memory 21, 5× Evidence, +503 „Loading model") · Homepage advanced-configuration.md:53
+   high/medium/low/minimal vs. Dropdown none…xhigh (präexistente Unschärfe).
 
-## Offene Punkte
+## Gelöste Alt-Punkte (dieser Zyklus)
 
-- ❓ applyEdit Not-Found-Dump cappen — Paul fragen.
-- ❓ Self-Ref-Guard bewusst verworfen? — kurz bestätigen.
-- ⏳ R-SEL-4 Umsetzungsdetails (3 Eigenentscheidungen) + User-Smoke — nach Merge.
-- ❓ Linter-idPattern-Verifikation · ⏳ User-Smoke Compact-Buttons · ⏳ Jackson-2→3 · release-2026-09-06 Merge.
-
-## Was nicht neu aufgemacht wird
-
-Keine Tests auf Prompt-Inhalte · kein Overlay-ToolService (ADR-0048) · Homepage `usage/selections.md` SOT · R3 Console-Log unangetastet · kein Parameter fürs Grep-Zeilen-Cap (Konstante).
-
-## Lektionen
-
-1. Edit-Tool-Triage: erst oldString null/blank prüfen, dann Self-Reference, dann Race — 2h Stress-Jagd vs. Input-Validation-Blick.
-2. Plan-Test-Inventare per Grep über BEIDE Module verifizieren (13 statt 4 Pins — Memory #33 erneut bestätigt, Dev hat korrekt gestoppt/gemeldet).
-3. `-pl org.sterl.llmpeon.test -am` = stale-p2-Falle (jetzt in AGENTS-DEV.md, `fdaed04`).
-4. Bei LLM-Abbruch im buildWithDev: State+Commits überleben — einfach fortsetzen lassen, Dev prüft IST per Git selbst.
+- Paul-Smoke 5 Zyklen ✅ (2026-09-30) — Push/Merge-Pflicht ging an Paul zurück, er will pushen.
+- R-CC-15 Nested-Agent-Parent-Memory ✅ gesmoked.

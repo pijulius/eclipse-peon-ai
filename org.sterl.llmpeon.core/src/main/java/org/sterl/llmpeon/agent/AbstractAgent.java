@@ -13,10 +13,14 @@ import java.util.function.Supplier;
 
 import org.sterl.llmpeon.ai.AgentConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
+import org.sterl.llmpeon.compact.CompactConstants;
+import org.sterl.llmpeon.compact.CompactService;
+import org.sterl.llmpeon.model.CompactResult;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.queuedmessages.UserMessageQueue;
 import org.sterl.llmpeon.shared.AiMonitor;
+import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.shared.StringUtil;
 import org.sterl.llmpeon.tool.ToolLoopRequest;
 import org.sterl.llmpeon.tool.ToolService;
@@ -41,7 +45,7 @@ public abstract class AbstractAgent implements AiAgent {
 
     protected final ToolService toolService;
 
-    private final UserMessageQueue messageQueue = new UserMessageQueue();
+    private UserMessageQueue messageQueue = new UserMessageQueue();
     private final AtomicBoolean working = new AtomicBoolean(false);
 
     private volatile String systemMessage = null;
@@ -150,6 +154,9 @@ public abstract class AbstractAgent implements AiAgent {
         return messageQueue.add(msg);
     }
 
+    /** Test seam: swap the queue (fixed {@code Clock} for Rule 9 Queued-At tests). Package-private. */
+    void setMessageQueue(UserMessageQueue queue) { this.messageQueue = queue; }
+
     public int tokenContextUsedInPercent() {
         float used = memory.getTotalTokenUsed();
         if (used < 100) return 0;
@@ -181,7 +188,16 @@ public abstract class AbstractAgent implements AiAgent {
             }
 
             var stillQueued = messageQueue.drainAll();
-            String next = stillQueued == null ? initialMessage : stillQueued + System.lineSeparator() + initialMessage;
+            String next;
+            if (stillQueued == null) {
+                next = initialMessage;
+            } else if (StringUtil.hasValue(initialMessage)) {
+                // Join path: queued payload + initial — no time here (Rule 9 shows it only on the marker)
+                next = stillQueued.text() + System.lineSeparator() + initialMessage;
+            } else {
+                // Follow-up (null initial): the queue IS the payload — mark like in-loop pollNext
+                next = queuedMarker(stillQueued);
+            }
 
             ChatResponse lastResponse = null;
             do {
@@ -191,11 +207,13 @@ public abstract class AbstractAgent implements AiAgent {
                     handleAbortAndDrain(monitor);
                     throw e;
                 }
-                // check if we have waiting messages
-                next = messageQueue.pollNext(); // FIFO drain
-                if (next != null) {
-                    monitor.onTool("Reading queued User message: " + next);
-                    next = "[Queued Message]: " + next;
+                var queued = messageQueue.pollNext();
+                if (queued != null) {
+                    monitor.onTool("Reading queued User message: " + queued.text()
+                            + " (queued " + messageQueue.queuedLabel(queued.queuedAt()) + ")");
+                    next = queuedMarker(queued);
+                } else {
+                    next = null;
                 }
             } while (next != null && lastResponse != null && !monitor.isCanceled());
 
@@ -213,16 +231,19 @@ public abstract class AbstractAgent implements AiAgent {
     /** Drain remaining queued messages into memory on abort/error. */
     private void handleAbortAndDrain(AiMonitor monitor) {
         int preservedCount = messageQueue.size();
-        String preserved = messageQueue.drainAll();
+        var preserved = messageQueue.drainAll();
         if (preserved != null) {
-            memory.add(UserMessage.from(preserved));
+            // Abort drain = memory payload — no time (Rule 9 shows it only on the onTool line + marker)
+            memory.add(UserMessage.from(preserved.text()));
             monitor.onTool(preservedCount + " queued message(s) preserved for your next request.");
         }
     }
 
     @Override
     public String drainQueue() {
-        return messageQueue.drainAll();
+        // Interface contract stays String; the queue now carries the queuedAt timestamp (Rule 9)
+        var drained = messageQueue.drainAll();
+        return drained == null ? null : drained.text();
     }
 
     /** @return the number of queued messages waiting to be processed. */
@@ -231,12 +252,25 @@ public abstract class AbstractAgent implements AiAgent {
         return messageQueue.size();
     }
 
+    /**
+     * Rule 9 LLM marker: {@code [Queued Message] (HH:mm): <text>} — the message text stays
+     * unchanged after the prefix; the time is rendered in the queue's clock zone.
+     */
+    private String queuedMarker(UserMessageQueue.QueuedMessage entry) {
+        return UserMessageQueue.QUEUED_MARKER_PREFIX + "(" + messageQueue.queuedLabel(entry.queuedAt()) + "): " + entry.text();
+    }
+
     /** Execute a single LLM+tool turn for the given message. */
     protected ChatResponse doCall(String message, AiMonitor monitor) {
         monitor = AiMonitor.nullSafety(monitor);
         monitor.onCallStart(message);
-        // auto compress if we are close to full before we start (slaves trigger earlier via compactFactor;
-        if (compactAfterTokens() < memory.getTotalTokenUsed()) {
+        // auto compress if we are close to full before we start (slaves trigger earlier via
+        // compactFactor). R-CC-8: only above MIN_COMPACT_MESSAGES — below that a compact skips/fails.
+        // R-CIB-1: autoCompactAfter <= 0 means "off" (like the Hint) — without this the gate would
+        // fire every turn (0 < tokens) while the Stager never caps.
+        if (configuredModel.getConfig().getAutoCompactAfter() > 0
+                && compactAfterTokens() < memory.getTotalTokenUsed()
+                && memory.size() > CompactConstants.MIN_COMPACT_MESSAGES) {
             monitor.onTool("Auto Compact before execution, context to full " + compactAfterTokens() + "/" + memory.getTotalTokenUsed());
             compact(monitor);
         }
@@ -268,34 +302,53 @@ public abstract class AbstractAgent implements AiAgent {
     }
 
     @Override
-    public boolean compact(AiMonitor monitor) {
-        // < 3: a compact leaves exactly 2 messages (Session-compacted user + summary) — with < 2
-        // a direct re-compact would fire a real LLM call on those 2 (R16 sharpened, 2026-09-15)
-        if (memory.size() < 3) return false;
+    public CompactResult compact(AiMonitor monitor) {
+        // User-triggered compact acquires the working flag (R-CT-1); an in-loop compact runs
+        // inside a turn that already holds it, so the CAS fails and the flag is left untouched.
+        boolean acquired = working.compareAndSet(false, true);
+        try {
+            // nullSafety before the guard: the FAILED_EMPTY onProblem path must never have a null monitor
+            monitor = AiMonitor.nullSafety(monitor);
+            // < MIN_COMPACT_MESSAGES: a compact leaves exactly 2 messages (Session-compacted user +
+            // summary) — with < 2 a direct re-compact would fire a real LLM call on those 2 (R16)
+            if (memory.size() < CompactConstants.MIN_COMPACT_MESSAGES) return CompactResult.skippedSmall();
 
-        monitor = AiMonitor.nullSafety(monitor);
-        var response = new AiCompressorAgent(configuredModel)
-                .call(memory.getCopy(), monitor);
-        
-        if (response == null || StringUtil.hasNoValue(response.aiMessage().text())) {
-            log.warn("Empty compact message received for " + getName());
-            return false;
+            // R-CIB-1: the staging budget is the raw config value — compactFactor scales only the trigger
+            // R-CC-12: capture the last provider-reported input tokens BEFORE the clear below —
+            // after it the value is gone (async-state-safety)
+            var requestTokens = memory.getLastProviderInputTokens();
+            var messages = memory.getCopy();
+            var compactCfg = configuredModel.getConfig().compactAgentConfig();
+            // R-CC-14: the service is monitor-free — the start line is emitted by the agent
+            // (all five triggers funnel through here), same wording as before
+            monitor.onTool("Compressing conversation " + messages.size() + " messages "
+                    + ChatMessageUtil.estimateTokens(messages) + " tokens"
+                    + (compactCfg.getModel() == null ? "" : " using " + compactCfg.getModel()));
+            var result = new CompactService(configuredModel).compact(
+                    getName(), messages, memory.tokenDiagnosis(), requestTokens);
+
+            if (result.status() == CompactResult.Status.FAILED_EMPTY) {
+                monitor.onProblem("Compact failed: " + result.cause());
+                return result;
+            }
+
+            memory.clear();
+            this.systemMessage = null;
+            // Restore turn-scoped context
+            var data = renderTurnContext(memory, turnContextSupplier, monitor);
+            // DON'T use addResult -> as the totalTokenUsed is from the compressor here which is to large
+            // we only take the compacted new message!
+            // and we remove the thinking, if any, from the result
+            data.add(TextContent.from(CompactConstants.REINSERT_MARKER));
+            // Ensure memory starts with a user message (many LLMs require this)
+            memory.add(UserMessage.from(data));
+            // we add the compact message as AI message
+            memory.add(AiMessage.from(result.summary()));
+
+            return result;
+        } finally {
+            if (acquired) working.set(false);
         }
-
-        memory.clear();
-        this.systemMessage = null;
-        // Restore turn-scoped context
-        var data = renderTurnContext(memory, turnContextSupplier, monitor);
-        // DON'T use addResult -> as the totalTokenUsed is from the compressor here which is to large
-        // we only take the compacted new message!
-        // and we remove the thinking, if any, from the result
-        data.add(TextContent.from("Session compacted:"));
-        // Ensure memory starts with a user message (many LLMs require this)
-        memory.add(UserMessage.from(data));
-        // we add the compact message as AI message
-        memory.add(AiMessage.from(response.aiMessage().text()));
-
-        return true;
     }
 
     /** Set static context items rendered into the system prompt on every rebuild. */

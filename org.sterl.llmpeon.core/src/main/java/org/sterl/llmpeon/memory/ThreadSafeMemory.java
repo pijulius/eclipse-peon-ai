@@ -30,6 +30,44 @@ public class ThreadSafeMemory {
     @Getter
     private volatile int totalTokenUsed = 0;
 
+    /**
+     * Whether {@link #totalTokenUsed} currently contains an estimate component (R-CC-6,
+     * docs/compact-context-counter.md). Set by every write site: estimate-driven writes
+     * (constructor restore, {@code add}, {@code reevaluateTokens}, fallback in
+     * {@code addResult}) mark it true, exact writes (provider input in {@code addResult},
+     * reset to 0 in {@code clear}/{@code replaceAll}) mark it false — 0 is exact.
+     */
+    private volatile boolean tokenIsEstimate = false;
+
+    /**
+     * R-CC-10: the LAST provider-REPORTED {@code inputTokenCount()} — what the model actually saw
+     * on its last call. Set only when the provider reports usage; a response without usage leaves
+     * the previous value in place ("last reported"); reset to null by {@code clear()}/{@code replaceAll()}.
+     * Pure observation — never feeds {@link #totalTokenUsed}, the gates or the display.
+     */
+    private volatile @Nullable Integer lastProviderInputTokens = null;
+
+    /** @return true if the current token counter value contains an estimate component. */
+    public boolean isTokenEstimate() {
+        return tokenIsEstimate;
+    }
+
+    /** R-CC-10: the last provider-reported input token count, or null when never reported/reset. */
+    public @Nullable Integer getLastProviderInputTokens() {
+        return lastProviderInputTokens;
+    }
+
+    /**
+     * R-CC-10: the compact-log diagnosis — the three context sizes side by side, each with its
+     * source/flag. Appended by ALL three compact event lines (hint, entry, skip). One format, one
+     * implementation: {@code " | memory=<total>(estimate=<flag>) model=<input|n/a> estimate=<chars×2/7>"}.
+     */
+    public synchronized String tokenDiagnosis() {
+        String model = lastProviderInputTokens == null ? "n/a" : String.valueOf(lastProviderInputTokens);
+        return " | memory=" + totalTokenUsed + "(estimate=" + tokenIsEstimate + ") model=" + model
+                + " estimate=" + ChatMessageUtil.estimateTokens(getCopy());
+    }
+
     public ThreadSafeMemory() {
         this(null);
     }
@@ -40,6 +78,7 @@ public class ThreadSafeMemory {
             memory.addAll(store.load());
             // getTokenCount(null, …) already returns the chars/3 estimate — no second /3
             totalTokenUsed = ChatMessageUtil.getTokenCount(null, new ArrayList<>(memory));
+            tokenIsEstimate = !memory.isEmpty(); // empty restore → 0, which is exact
         }
     }
 
@@ -53,6 +92,7 @@ public class ThreadSafeMemory {
      */
     public synchronized ThreadSafeMemory add(ChatMessage message) {
         totalTokenUsed += ChatMessageUtil.estimateTokens(List.of(message));
+        tokenIsEstimate = true;
 
         if (message instanceof UserMessage num 
                 && (!memory.isEmpty() && memory.getLast() instanceof UserMessage lum)) {
@@ -63,7 +103,7 @@ public class ThreadSafeMemory {
                 && (!memory.isEmpty() && memory.getLast() instanceof ToolExecutionResultMessage tR)) {
             // https://github.com/sterlp/eclipse-peon-ai/issues/87
             // this can happen e.g. or rate limits or server errors...
-            log.warn("Detected tool result without AI response! {} - {}", tR.id(), tR.toolName());
+            log.warn("Detected tool result without AI response but a Usermessage is added! {} - {}", tR.id(), tR.toolName());
             var repair = AiMessage.from("ok");
             memory.add(repair);
             memory.add(num);
@@ -120,6 +160,8 @@ public class ThreadSafeMemory {
     public synchronized void clear() {
         memory.clear();
         totalTokenUsed = 0;
+        tokenIsEstimate = false;
+        lastProviderInputTokens = null;
         clearStore();
     }
 
@@ -127,6 +169,8 @@ public class ThreadSafeMemory {
         memory.clear();
         if (messages != null) memory.addAll(messages);
         totalTokenUsed = 0;
+        tokenIsEstimate = false;
+        lastProviderInputTokens = null;
         persist(new ArrayList<>(memory));
     }
     
@@ -151,6 +195,7 @@ public class ThreadSafeMemory {
     /** Re-derives the token counter from the actual memory content (e.g. after a compact). */
     public synchronized void reevaluateTokens() {
         totalTokenUsed = ChatMessageUtil.estimateTokens(getCopy());
+        tokenIsEstimate = true;
     }
 
     public synchronized void addResult(ChatResponse response, List<ToolExecutionResultMessage> toolResult) {
@@ -160,14 +205,20 @@ public class ThreadSafeMemory {
         memory.addAll(toolResult);
         appended.add(aiMessage);
         appended.addAll(toolResult);
+        var usage = ChatMessageUtil.tokenUsage(response);
         totalTokenUsed = ChatMessageUtil.getTokenCount(response, memory);
+        tokenIsEstimate = usage == null || usage.inputTokenCount() == null;
+        if (usage != null && usage.inputTokenCount() != null) lastProviderInputTokens = usage.inputTokenCount();
         append(appended);
     }
 
     public synchronized void addResult(ChatResponse response) {
         var message = response.aiMessage();
         memory.add(message);
+        var usage = ChatMessageUtil.tokenUsage(response);
         totalTokenUsed = ChatMessageUtil.getTokenCount(response, memory);
+        tokenIsEstimate = usage == null || usage.inputTokenCount() == null;
+        if (usage != null && usage.inputTokenCount() != null) lastProviderInputTokens = usage.inputTokenCount();
         append(message);
     }
 

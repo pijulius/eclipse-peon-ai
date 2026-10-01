@@ -16,6 +16,8 @@ public class DocsLinterTool extends AbstractTool {
 
     private static final String DEFAULT_DOC_ROOT = "docs";
     static final String DEFAULT_ID_PATTERN = "\\bUC-[A-Z]+-\\d+(?:-\\d+[a-z]?)*\\b";
+    static final String ID_PATTERN_DESCRIPTION =
+            "regex that FULL-matches UC ids (e.g. UC-PP-\\d+); full-match, not a prefix";
 
     private volatile Path workingDir;
 
@@ -49,7 +51,7 @@ public class DocsLinterTool extends AbstractTool {
     public String lintDocs(
             @P(required = false, name = "root") String root,
             @P(required = false, name = "docRoots") List<String> docRoots,
-            @P(required = false, name = "idPattern") String idPattern) {
+            @P(required = false, name = "idPattern", description = ID_PATTERN_DESCRIPTION) String idPattern) {
 
         Path effectiveRoot = resolveRoot(root);
         if (docRoots == null || docRoots.isEmpty()) {
@@ -76,7 +78,7 @@ public class DocsLinterTool extends AbstractTool {
             @P(required = false, name = "docRoots") List<String> docRoots,
             @P(required = false, name = "testRoots") List<String> testRoots,
             @P(required = false, name = "testGlobs") List<String> testGlobs,
-            @P(required = false, name = "idPattern") String idPattern) {
+            @P(required = false, name = "idPattern", description = ID_PATTERN_DESCRIPTION) String idPattern) {
 
         Path effectiveRoot = resolveRoot(root);
         if (docRoots == null || docRoots.isEmpty()) {
@@ -111,12 +113,9 @@ public class DocsLinterTool extends AbstractTool {
         Pattern pattern = Pattern.compile(DEFAULT_ID_PATTERN);
         validateChildRoots(effectiveRoot, docRoots);
 
+        // Input normalization at the boundary; validation lives in DocsLinter.requireValidPrefix (R-DL-23).
         if (prefix != null) {
             prefix = prefix.trim();
-            if (!prefix.matches("[A-Z]+")) {
-                throw new IllegalArgumentException(
-                        "prefix must be uppercase letters only: " + prefix);
-            }
         }
 
         DocsLinter linter = new DocsLinter();
@@ -131,22 +130,53 @@ public class DocsLinterTool extends AbstractTool {
     // --- package-private helpers visible for tests ---
 
     private String formatNextIds(NextIdsResult result) {
+        var renderer = new DocsLintReportRenderer();
         StringBuilder sb = new StringBuilder();
-        sb.append(new DocsLintReportRenderer().docScanSummary(
+        sb.append(renderer.docScanSummary(
                 result.lintedDocCount(), result.skippedDocCount()));
         for (var r : result.nextIds()) {
             sb.append("\n");
-            if (r.occupied()) {
+            if (!r.occupied()) {
+                sb.append(r.prefix()).append(": free, would start: R-").append(r.prefix())
+                        .append("-1, UC-").append(r.prefix()).append("-1");
+            } else if (flatWins(r)) {
+                FamilyOccurrence f = r.flat();
+                sb.append(r.prefix()).append(": occupied, next: ").append(r.prefix())
+                        .append("-").append(r.nextFlat())
+                        .append(" (highest found ").append(r.prefix())
+                        .append("-").append(f.highestNumber())
+                        .append(" in ").append(f.file()).append(")");
+            } else {
                 sb.append(r.prefix()).append(": occupied, next: R-").append(r.prefix())
                         .append("-").append(r.nextRule())
                         .append(", UC-").append(r.prefix())
                         .append("-").append(r.nextUseCase());
-            } else {
-                sb.append(r.prefix()).append(": free, would start: R-").append(r.prefix())
-                        .append("-1, UC-").append(r.prefix()).append("-1");
+                FamilyOccurrence cited = citedFamily(r);
+                sb.append(" (highest found ").append(cited == r.rule() ? "R-" : "UC-")
+                        .append(r.prefix()).append("-").append(cited.highestNumber())
+                        .append(" in ").append(cited.file()).append(")");
             }
         }
+        sb.append(renderer.skippedDocsList(result.skippedDocs()));
         return sb.toString();
+    }
+
+    // R-DL-24: a flat registry is continued flat, even on a tie; missing families count as 0.
+    private static boolean flatWins(NextIds r) {
+        int flatMax = r.flat() == null ? 0 : r.flat().highestNumber();
+        return flatMax > 0
+                && flatMax >= (r.rule() == null ? 0 : r.rule().highestNumber())
+                && flatMax >= (r.useCase() == null ? 0 : r.useCase().highestNumber());
+    }
+
+    // Cited family for the Fundstelle: the higher max, rule family on a tie.
+    private static FamilyOccurrence citedFamily(NextIds r) {
+        FamilyOccurrence rule = r.rule();
+        FamilyOccurrence useCase = r.useCase();
+        if (useCase != null && (rule == null || useCase.highestNumber() > rule.highestNumber())) {
+            return useCase;
+        }
+        return rule;
     }
 
     private void validateChildRoots(Path effectiveRoot, List<String> childRoots) {
