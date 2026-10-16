@@ -2,13 +2,20 @@ package org.sterl.llmpeon.test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.stream.Collectors;
 
 import org.junit.Test;
+import org.sterl.llmpeon.ai.AiProvider;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.command.CommandService;
+import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.docslinter.DocsIdTool;
 import org.sterl.llmpeon.docslinter.DocsLinterTool;
 import org.sterl.llmpeon.parts.ai.component.SharedToolsComponent;
@@ -22,7 +29,9 @@ import org.sterl.llmpeon.parts.tools.EclipseWorkspaceWriteFileTool;
 import org.sterl.llmpeon.parts.tools.debug.JavaDebugTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
 import org.sterl.llmpeon.skill.SkillService;
+import org.sterl.llmpeon.tool.ToolLoopRequest;
 import org.sterl.llmpeon.tool.ToolService;
+import org.sterl.llmpeon.tool.WriteValidator;
 import org.sterl.llmpeon.tool.tools.DiskFileReadTool;
 import org.sterl.llmpeon.tool.tools.DiskFileWriteTool;
 import org.sterl.llmpeon.tool.tools.DiskGrepTool;
@@ -149,6 +158,85 @@ public class SharedToolsComponentTest {
         assertFalse(sut.toolService().getTool(DiskGrepTool.class).isPresent());
     }
 
+    /** ADR-0067 R20: GIVEN a separate po registry registered with the gate WHEN the disk tools toggle
+     *  THEN the po registry receives the same four instances as the shared service, without duplicates. */
+    @Test
+    public void diskGateTogglesPoRegistryToo() {
+        // GIVEN: a separate po registry (like BuildPoAgentComponent's ToolService(false)), registered with the gate
+        var po = new ToolService(false);
+        sut.registerDiskGatedRegistry(po);
+
+        // WHEN: disabled (default) — no disk tools on the po registry
+        assertFalse(po.getTool(DiskFileWriteTool.class).isPresent());
+        assertFalse(po.getTool(DiskFileReadTool.class).isPresent());
+        assertFalse(po.getTool(DiskGrepTool.class).isPresent());
+        assertFalse(po.getTool(WebGetTool.class).isPresent());
+
+        // WHEN: enabled
+        sut.updateActiveDiskTools(config(true));
+
+        // THEN: all four disk tools are present on the po registry
+        assertTrue("po registry must receive the disk write tool", po.getTool(DiskFileWriteTool.class).isPresent());
+        assertTrue("po registry must receive the disk read tool", po.getTool(DiskFileReadTool.class).isPresent());
+        assertTrue("po registry must receive the disk grep tool", po.getTool(DiskGrepTool.class).isPresent());
+        assertTrue("po registry must receive webGet", po.getTool(WebGetTool.class).isPresent());
+
+        // AND: they are the SAME instances as on the shared service (one family, no copies)
+        var shared = sut.toolService();
+        assertSame(shared.getTool(DiskFileWriteTool.class).get(), po.getTool(DiskFileWriteTool.class).get());
+        assertSame(shared.getTool(DiskFileReadTool.class).get(), po.getTool(DiskFileReadTool.class).get());
+        assertSame(shared.getTool(DiskGrepTool.class).get(), po.getTool(DiskGrepTool.class).get());
+        assertSame(shared.getTool(WebGetTool.class).get(), po.getTool(WebGetTool.class).get());
+
+        // AND: enabling twice does not duplicate them
+        long writeExecutors = countExecutors(po, DiskFileWriteTool.class);
+        sut.updateActiveDiskTools(config(true));
+        assertEquals(writeExecutors, countExecutors(po, DiskFileWriteTool.class));
+
+        // WHEN: disabled again
+        sut.updateActiveDiskTools(config(false));
+
+        // THEN: all four are gone from the po registry
+        assertFalse(po.getTool(DiskFileWriteTool.class).isPresent());
+        assertFalse(po.getTool(DiskFileReadTool.class).isPresent());
+        assertFalse(po.getTool(DiskGrepTool.class).isPresent());
+        assertFalse(po.getTool(WebGetTool.class).isPresent());
+    }
+
+    /** ADR-0067 R20: GIVEN the po registry with disk tools enabled WHEN the shared DiskFileWriteTool
+     *  instance is invoked with the DOCS write validator THEN a write outside docs is rejected
+     *  before any I/O (a write-then-reject regression would leave the file behind). */
+    @Test
+    public void poRegistryDiskWriteOutsideDocsRejected() {
+        // GIVEN: a po registry (ToolService(false)) with the disk tools enabled via the gate
+        var po = new ToolService(false);
+        sut.registerDiskGatedRegistry(po);
+        sut.updateActiveDiskTools(config(true));
+
+        // the same DiskFileWriteTool instance the po registry now carries
+        var writeTool = po.getTool(DiskFileWriteTool.class).orElseThrow();
+        writeTool.withToolRequest(docsRequest());
+        Path rejected = writeTool.getWorkingDir().resolve("outside/notes.txt");
+
+        try {
+            // WHEN / THEN: a write outside docs is rejected by the validator — no model call
+            var e = assertThrows(IllegalArgumentException.class,
+                    () -> writeTool.diskWriteFile("outside/notes.txt", "nope"));
+            assertTrue("expected 'Write denied' in message:\n" + e.getMessage(),
+                    e.getMessage().contains("Write denied"));
+
+            // AND: the validator fired before any I/O — a write-then-reject would leave the file
+            assertFalse("a rejected write must not touch the disk", Files.exists(rejected));
+        } finally {
+            // hygiene: a "write-then-reject" mutation would have created the file
+            try {
+                Files.deleteIfExists(rejected);
+                Files.deleteIfExists(rejected.getParent());
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
     /** GIVEN default config (disk tools disabled) WHEN toggling THEN webGet follows the disk tools (R-WEB-8, default OFF). */
     @Test
     public void test_webGetFollowsDiskToolToggle() {
@@ -209,6 +297,16 @@ public class SharedToolsComponentTest {
                 .build()
                 .toBuilder()
                 .diskToolsEnabled(diskEnabled)
+                .build();
+    }
+
+    /** DOCS write-validator request (same pattern as core's DiskFileWriteToolTest.docsRequest()). */
+    private static ToolLoopRequest docsRequest() {
+        var model = LlmConfig.newConfig(AiProvider.OLLAMA, "test-model", "http://localhost:9999").build();
+        return ToolLoopRequest.builder()
+                .memory(new ThreadSafeMemory())
+                .chatModel(model)
+                .writeValidator(WriteValidator.DOCS)
                 .build();
     }
 }

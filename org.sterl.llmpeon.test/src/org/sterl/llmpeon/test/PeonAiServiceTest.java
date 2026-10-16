@@ -17,11 +17,13 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.sterl.llmpeon.StreamMock;
@@ -36,6 +38,7 @@ import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.UserContext;
 import org.sterl.llmpeon.memory.FileAgentHistoryStore;
+import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.parts.PeonConstants;
 import org.sterl.llmpeon.parts.ai.PeonAiService;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
@@ -53,6 +56,7 @@ import org.sterl.llmpeon.skill.SkillService;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.docslinter.DocsIdTool;
 import org.sterl.llmpeon.docslinter.DocsLinterTool;
+import org.sterl.llmpeon.tool.ToolLoopRequest;
 import org.sterl.llmpeon.tool.tools.CompactSessionTool;
 import org.sterl.llmpeon.tool.tools.DiskFileReadTool;
 import org.sterl.llmpeon.tool.tools.DiskFileWriteTool;
@@ -60,10 +64,12 @@ import org.sterl.llmpeon.tool.tools.DiskGrepTool;
 import org.sterl.llmpeon.tool.tools.SearchAgentTool;
 import org.sterl.llmpeon.tool.tools.ShellTool;
 import org.sterl.llmpeon.tool.tools.SkillTool;
+import org.sterl.llmpeon.tool.tools.WebGetTool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
 
@@ -85,6 +91,11 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         aiService.clearAll();
         ccm.setChatModel(streamMock.buildOkMock());
         aiService.setProject(project);
+    }
+
+    @After
+    public void clearCurrentService() {
+        PeonAiService.clearCurrent();
     }
     
     @Test
@@ -962,6 +973,134 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertTrue("SearchAgent keeps read tools", searchAgent.getFilter().test(grep));
     }
 
+    // UC-ATC-4
+    @Test
+    public void dokAllowlistWildcardStillClassFiltered() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var dok = aiService.getAgent(AiReviewAgent.NAME).orElseThrow();
+
+        // GIVEN the review slot's allowlist is the full wildcard
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .agentTools(Map.of("review", "*")).build());
+
+        // THEN the class filter still applies: shell stays (Da Dok's only exception), write tools stay hidden
+        var names = activeToolNames(dok);
+        assertTrue("Da Dok keeps " + ShellTool.SHELL_RUN_COMMAND, names.contains(ShellTool.SHELL_RUN_COMMAND));
+        assertTrue("Da Dok keeps " + ShellTool.OPERATION_SYSTEM_INFORMATION,
+                names.contains(ShellTool.OPERATION_SYSTEM_INFORMATION));
+        var writeExecutors = dok.getToolService().getExecutors().stream()
+                .filter(e -> e.getTool() instanceof EclipseWorkspaceWriteFileTool
+                        || e.getTool() instanceof DiskFileWriteTool)
+                .toList();
+        assertFalse("shared service carries write tools to assert against", writeExecutors.isEmpty());
+        for (var exec : writeExecutors) {
+            assertFalse("Da Dok must not see " + exec.getSpec().name(), names.contains(exec.getSpec().name()));
+        }
+
+        // AND the allowlist narrows the class-filtered set (per-call read, agents are not rebuilt)
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .agentTools(Map.of("review", "*, !readOperationSystemInformation")).build());
+        var narrowed = activeToolNames(dok);
+        assertTrue("Da Dok keeps " + ShellTool.SHELL_RUN_COMMAND, narrowed.contains(ShellTool.SHELL_RUN_COMMAND));
+        assertFalse("the negation removes " + ShellTool.OPERATION_SYSTEM_INFORMATION,
+                narrowed.contains(ShellTool.OPERATION_SYSTEM_INFORMATION));
+    }
+
+    // UC-TF-2
+    @Test
+    public void sniffaAllowlistWildcardStillPlanFree() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var searchAgent = aiService.getSharedToolService().getTool(SearchAgentTool.class).orElseThrow();
+
+        // GIVEN the search slot's allowlist is the full wildcard
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .agentTools(Map.of("search", "*")).build());
+
+        // THEN the sub-loop's tool set stays plan-free and keeps the read tools
+        var names = sniffaSubLoopToolNames(searchAgent);
+        for (var name : names) {
+            assertFalse("Sniffa sub-loop must not offer " + name, name.startsWith("plan"));
+        }
+        assertTrue("Sniffa keeps eclipseGrepFiles", names.contains("eclipseGrepFiles"));
+
+        // AND the search slot's allowlist narrows the sub-loop (parent-independent, not inherited)
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .agentTools(Map.of("search", "eclipse")).build());
+        var narrowed = sniffaSubLoopToolNames(searchAgent);
+        assertFalse("sub-loop must still offer tools", narrowed.isEmpty());
+        for (var name : narrowed) {
+            assertTrue("Sniffa sub-loop restricted to eclipse*: " + name, name.startsWith("eclipse"));
+        }
+    }
+
+    /** Runs Da Sniffa's sub-loop against the mock model and returns the tool names sent to the model. */
+    private List<String> sniffaSubLoopToolNames(SearchAgentTool searchAgent) {
+        var ccm = new ConfiguredChatModel(aiService.getConfig());
+        ccm.setChatModel(streamMock.buildOkMock());
+        searchAgent.withToolRequest(ToolLoopRequest.builder()
+                .memory(new ThreadSafeMemory())
+                .chatModel(ccm)
+                .build());
+        streamMock.reset();
+        var result = searchAgent.searchAgent("find the plan file");
+        assertFalse("sub-loop failed: " + result, result.startsWith("Search agent failed"));
+        var specs = streamMock.getLastRequest().parameters().toolSpecifications();
+        assertNotNull("sub-loop request must carry tool specs", specs);
+        return specs.stream().map(ToolSpecification::name).toList();
+    }
+
+    // UC-ATC-2
+    @Test
+    public void devAllowlistNegationRemovesDebugFromMek() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN the dev slot's allowlist excludes the debugJava* family
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .agentTools(Map.of("dev", "*, !debugJava*")).build());
+
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        var mek = jonDelegate().getDevSlave();
+
+        // THEN Mek (a dev-slot slave) no longer sees the debug tools but keeps the read tools
+        var debugExecutors = mek.getToolService().getExecutors().stream()
+                .filter(e -> e.getTool() instanceof JavaDebugTool)
+                .toList();
+        assertFalse("shared service carries debug tools to assert against", debugExecutors.isEmpty());
+        var names = activeToolNames(mek);
+        for (var exec : debugExecutors) {
+            assertFalse("Mek must not see " + exec.getSpec().name(), names.contains(exec.getSpec().name()));
+        }
+        assertTrue("Mek keeps eclipseGrepFiles", names.contains("eclipseGrepFiles"));
+    }
+
+    /**
+     * Regression guard (R-TF-4): without a stored allowlist the tool matrix is unchanged —
+     * dev keeps shell + the debugJava* family, review keeps shell but no write tools.
+     * Green before AND after the allowlist feature (characterization, not a feature proof).
+     */
+    @Test
+    public void absentStoreLeavesMatrixUnchanged() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var dev = aiService.getAgent(AiDevAgent.NAME).orElseThrow();
+        var devNames = activeToolNames(dev);
+        assertTrue("Dev keeps " + ShellTool.SHELL_RUN_COMMAND, devNames.contains(ShellTool.SHELL_RUN_COMMAND));
+        assertTrue("Dev keeps the debugJava* family",
+                devNames.stream().anyMatch(n -> n.startsWith("debugJava")));
+
+        var dok = aiService.getAgent(AiReviewAgent.NAME).orElseThrow();
+        var dokNames = activeToolNames(dok);
+        assertTrue("Review keeps " + ShellTool.SHELL_RUN_COMMAND, dokNames.contains(ShellTool.SHELL_RUN_COMMAND));
+        for (var exec : dok.getToolService().getExecutors()) {
+            if (exec.getTool() instanceof EclipseWorkspaceWriteFileTool
+                    || exec.getTool() instanceof DiskFileWriteTool) {
+                assertFalse("Review must not see " + exec.getSpec().name(), dokNames.contains(exec.getSpec().name()));
+            }
+        }
+    }
+
     /**
      * Regression guard: Jon's docs tool surface must stay independent of the disk-tools gate.
      * The same living AiPoAgent is observed before and after a live true→false toggle.
@@ -1003,6 +1142,65 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
                 aiService.getSharedToolService().getTool(DiskFileReadTool.class).isEmpty());
         assertTrue("disk grep tool must be gone after toggle",
                 aiService.getSharedToolService().getTool(DiskGrepTool.class).isEmpty());
+    }
+
+    /**
+     * ADR-0067 wiring guard (production wiring, not the component seam): the PoAgent's own registry
+     * is registered with the disk gate only in PeonAiService's constructor. A regression there
+     * (registry silently dropped) would stay green in every component-level test.
+     */
+    @Test
+    public void productionWiring_poRegistryFollowsDiskGate() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var jon = aiService.getAgents().stream().filter(AiPoAgent.class::isInstance)
+                .map(AiPoAgent.class::cast).findFirst().orElseThrow();
+
+        // WHEN: disk tools enabled through the production config path
+        aiService.updateConfig(aiService.getConfig().toBuilder().diskToolsEnabled(true).build());
+
+        // THEN: Jon's own registry carries all four disk tools
+        var po = jon.getToolService();
+        assertTrue("po registry must carry the disk write tool", po.getTool(DiskFileWriteTool.class).isPresent());
+        assertTrue("po registry must carry the disk read tool", po.getTool(DiskFileReadTool.class).isPresent());
+        assertTrue("po registry must carry the disk grep tool", po.getTool(DiskGrepTool.class).isPresent());
+        assertTrue("po registry must carry webGet", po.getTool(WebGetTool.class).isPresent());
+
+        // AND: they are the SAME instances as on the shared service (one family, no copies)
+        var shared = aiService.getSharedToolService();
+        assertSame("disk write tool must be the shared instance",
+                shared.getTool(DiskFileWriteTool.class).get(), po.getTool(DiskFileWriteTool.class).get());
+        assertSame("disk read tool must be the shared instance",
+                shared.getTool(DiskFileReadTool.class).get(), po.getTool(DiskFileReadTool.class).get());
+        assertSame("disk grep tool must be the shared instance",
+                shared.getTool(DiskGrepTool.class).get(), po.getTool(DiskGrepTool.class).get());
+        assertSame("webGet must be the shared instance",
+                shared.getTool(WebGetTool.class).get(), po.getTool(WebGetTool.class).get());
+    }
+
+    /**
+     * ADR-0067 wiring guard (production wiring, not the component seam): the McpConnectionService is
+     * constructed with BOTH agent-facing registries only in PeonAiService's constructor. Inspected
+     * without a real connect — the wired list is asserted, no MCP server is started.
+     */
+    @Test
+    public void productionWiring_mcpConnectsBothRegistries() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var jon = aiService.getAgents().stream().filter(AiPoAgent.class::isInstance)
+                .map(AiPoAgent.class::cast).findFirst().orElseThrow();
+
+        // THEN: the production service holds exactly [shared, po] — the list MCP connects
+        var mcp = readField(aiService, "mcpConnectionService");
+        var registries = (List<?>) readField(mcp, "toolServices");
+        assertEquals(List.of(aiService.getSharedToolService(), jon.getToolService()), registries);
+    }
+
+    /** Read-only inspection of the production wiring (PeonAiService keeps mcpConnectionService private). */
+    private static Object readField(Object owner, String name) throws Exception {
+        var f = owner.getClass().getDeclaredField(name);
+        f.setAccessible(true);
+        return f.get(owner);
     }
 
 
@@ -1969,6 +2167,66 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             assertEquals("alpha\n    beta\n", planTool.planRead());
         } finally {
             eclipseDeleteResource("/test_project/" + PlanTool.OVERVIEW_FILE);
+        }
+    }
+
+    // R-ATC-8: the preview target prefers the PO-Team slave (stricter class filter) over the
+    // standalone persistent agent, so the preview never claims a tool the agent cannot call.
+    @Test
+    public void agentForPreviewSlotPrefersPoSlave() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var dev = aiService.agentForPreviewSlot(AgentModelConfig.DEV);
+        var plan = aiService.agentForPreviewSlot(AgentModelConfig.PLAN);
+        var review = aiService.agentForPreviewSlot(AgentModelConfig.REVIEW);
+
+        // THEN each dev/plan/review slot resolves to a slave of the matching class,
+        // and it is NOT the standalone persistent agent
+        assertNotNull("dev preview target", dev);
+        assertTrue("dev preview target is a dev agent", dev instanceof AiDevAgent);
+        assertNotSame("dev preview target is the PO slave, not standalone",
+                aiService.getAgent(AiDevAgent.NAME).orElseThrow(), dev);
+
+        assertNotNull("plan preview target", plan);
+        assertTrue("plan preview target is a plan agent", plan instanceof AiPlanAgent);
+        assertNotSame("plan preview target is the PO slave, not standalone",
+                aiService.getAgent(AiPlanAgent.NAME).orElseThrow(), plan);
+
+        assertNotNull("review preview target", review);
+        assertTrue("review preview target is a review agent", review instanceof AiReviewAgent);
+        assertNotSame("review preview target is the PO slave, not standalone",
+                aiService.getAgent(AiReviewAgent.NAME).orElseThrow(), review);
+
+        // AND the PO slot resolves to Jon himself (the persistent PO agent)
+        var po = aiService.agentForPreviewSlot(AgentModelConfig.PO);
+        assertNotNull("po preview target", po);
+        assertSame("po preview target is the persistent PO agent",
+                aiService.getAgent(AiPoAgent.NAME).orElseThrow(), po);
+    }
+
+    // R-ATC-8: search and compact have no AiAgent — search previews via SearchAgentTool,
+    // compact has no tools field.
+    @Test
+    public void agentForPreviewSlotSearchAndCompactReturnNull() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        assertNull("search has no AiAgent preview target",
+                aiService.agentForPreviewSlot(AgentModelConfig.SEARCH));
+        assertNull("compact has no AiAgent preview target",
+                aiService.agentForPreviewSlot(AgentModelConfig.COMPACT));
+        assertFalse("searchAgentTool is resolvable for the search preview",
+                aiService.searchAgentTool().isEmpty());
+    }
+
+    // F4 test hygiene: the static handle is the last-constructed service and reset clears it.
+    @Test
+    public void currentIsTheLastConstructedService() {
+        try {
+            assertSame("the constructed service is current", aiService, PeonAiService.current());
+            PeonAiService.clearCurrent();
+            assertNull("clearCurrent resets the static handle", PeonAiService.current());
+        } finally {
+            PeonAiService.clearCurrent();
         }
     }
 

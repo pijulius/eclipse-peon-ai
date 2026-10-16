@@ -3,8 +3,11 @@ package org.sterl.llmpeon.test;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -13,15 +16,19 @@ import java.util.Map;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
+import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Text;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.AiProvider;
+import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.ai.LlmConfigLoader;
 import org.sterl.llmpeon.ai.LlmConfigSaver;
 import org.sterl.llmpeon.ai.LlmConfigStore;
+import org.sterl.llmpeon.parts.ai.PeonAiService;
 import org.sterl.llmpeon.parts.config.widgets.AgentModelConfigSection;
 
 /**
@@ -58,6 +65,7 @@ public class AgentModelConfigSectionTest extends AbstractSwtUiTest {
             });
         }
         ollamaSection = null;
+        PeonAiService.clearCurrent();
     }
 
     @Test
@@ -167,13 +175,184 @@ public class AgentModelConfigSectionTest extends AbstractSwtUiTest {
         assertTrue("unset think must not be persisted, was " + store.asMap(), store.asMap().isEmpty());
     }
 
+    // UC-ATC-1
+    @Test
+    public void loadToolsAndGetToolsRoundTrip() {
+        // GIVEN a section with the tools field
+        ui(() -> {
+            section.loadTools("eclipse, !debugJava*");
+            return null;
+        });
+
+        // WHEN read back, the raw CSV roundtrips verbatim
+        assertEquals("eclipse, !debugJava*", ui(() -> section.getTools()));
+
+        // AND null loads as an empty field that reads back null (absent = all, R-ATC-3)
+        ui(() -> {
+            section.loadTools(null);
+            return null;
+        });
+        assertEquals("", ui(() -> findToolsText(section).getText()));
+        assertNull(ui(() -> section.getTools()));
+    }
+
+    // R-ATC-9
+    @Test
+    public void isToolsValidRejectsBareBang() {
+        // GIVEN the section's tools field
+        ui(() -> {
+            section.loadTools("!");
+            return null;
+        });
+        assertFalse("a bare '!' must be rejected", ui(() -> section.isToolsValid()));
+
+        ui(() -> {
+            section.loadTools("eclipse, !");
+            return null;
+        });
+        assertFalse("a bare '!' mixed into a valid list must be rejected", ui(() -> section.isToolsValid()));
+
+        ui(() -> {
+            section.loadTools("!debugJava*");
+            return null;
+        });
+        assertTrue("a prefixed negation is valid", ui(() -> section.isToolsValid()));
+
+        ui(() -> {
+            section.loadTools("eclipse");
+            return null;
+        });
+        assertTrue("a plain prefix is valid", ui(() -> section.isToolsValid()));
+
+        ui(() -> {
+            section.loadTools("");
+            return null;
+        });
+        assertTrue("empty = all is valid", ui(() -> section.isToolsValid()));
+    }
+
+    @Test
+    public void noToolsFieldSectionHasNoToolsField() {
+        // GIVEN a section built without the tools field (compact — D10: CompactService never sends tools)
+        var compact = ui(() -> newSection(AiProvider.ANTHROPIC, AgentModelConfig.COMPACT, false));
+        try {
+            // THEN there is no tools field and the API degrades to absent/valid
+            assertNull("no tools label for a field-less section", ui(() -> findToolsLabel(compact)));
+            assertNull("getTools() is null without a field", ui(() -> compact.getTools()));
+            assertTrue("isToolsValid() is trivially true without a field", ui(() -> compact.isToolsValid()));
+        } finally {
+            ui(() -> {
+                compact.dispose();
+                return null;
+            });
+        }
+    }
+
+    // R-ATC-8: a tools field carries its preview button; a field-less section (compact) does not.
+    @Test
+    public void previewButtonPresentOnlyWithToolsField() {
+        // GIVEN the default section has a tools field
+        var withButton = ui(() -> findPreviewButton(section));
+        assertNotNull("a tools section carries the preview button", withButton);
+        assertEquals("Preview active tools…", ui(() -> findPreviewButton(section).getText()));
+
+        // AND a field-less section (compact) has no preview button
+        var compact = ui(() -> newSection(AiProvider.ANTHROPIC, AgentModelConfig.COMPACT, false));
+        try {
+            assertNull("a field-less section has no preview button", ui(() -> findPreviewButton(compact)));
+        } finally {
+            ui(() -> {
+                compact.dispose();
+                return null;
+            });
+        }
+    }
+
+    // R-ATC-8 / Q2: the search preview button is enabled as soon as a live service exists —
+    // no AiAgent is needed (search resolves via SearchAgentTool, agentForPreviewSlot → null).
+    @Test
+    public void searchPreviewButtonEnabledWithoutAiAgent() {
+        PeonAiService.clearCurrent();
+        try {
+            // GIVEN a live service (search has no AiAgent, but the button only needs current() != null)
+            ui(() -> {
+                var ccm = new ConfiguredChatModel(LlmConfig.builder()
+                        .model("test").url("http://localhost:0")
+                        .configDir(Path.of(System.getProperty("java.io.tmpdir"), ".peon-test"))
+                        .build());
+                new PeonAiService(() -> {}, null, null, null, ccm);
+                return null;
+            });
+            var search = ui(() -> newSection(AiProvider.ANTHROPIC, AgentModelConfig.SEARCH, true));
+            try {
+                var button = ui(() -> findPreviewButton(search));
+                assertNotNull("search section carries the preview button", button);
+                assertTrue("search preview button is enabled without an AiAgent", button.isEnabled());
+                assertNull("search has no AiAgent preview target",
+                        PeonAiService.current().agentForPreviewSlot(AgentModelConfig.SEARCH));
+            } finally {
+                ui(() -> {
+                    search.dispose();
+                    return null;
+                });
+            }
+        } finally {
+            PeonAiService.clearCurrent();
+        }
+    }
+
+    // R-ATC-8: without a live service the preview button is disabled (nothing to resolve against).
+    @Test
+    public void previewButtonDisabledWithoutService() {
+        PeonAiService.clearCurrent();
+        var button = ui(() -> findPreviewButton(section));
+        assertNotNull("the tools section carries the preview button", button);
+        assertFalse("no live service → preview button disabled", button.isEnabled());
+    }
+
     // --- helpers ---
 
     /** UI-thread only. Builds a section for the given base provider; the mock server only supplies the URL. */
     private AgentModelConfigSection newSection(AiProvider provider) {
+        return newSection(provider, "test", true);
+    }
+
+    /** UI-thread only. Builds a section; the mock server only supplies the URL. */
+    private AgentModelConfigSection newSection(AiProvider provider, String agentId, boolean toolsField) {
         var base = LlmConfig.builder().providerType(provider).model("claude-x")
                 .url(mockLlmServer.getUrl()).timeout(Duration.ofSeconds(30)).build();
-        return new AgentModelConfigSection(shell, "test", () -> base);
+        return new AgentModelConfigSection(shell, agentId, () -> base, toolsField);
+    }
+
+    /** UI-thread only. The "Tools (CSV, empty = all):" label, or null when the section has no tools field. */
+    private static Label findToolsLabel(AgentModelConfigSection section) {
+        for (var child : section.getChildren()) {
+            if (child instanceof Label l && "Tools (CSV, empty = all):".equals(l.getText())) {
+                return l;
+            }
+        }
+        return null;
+    }
+
+    /** UI-thread only. The tools field: the Text sibling right after the tools label. */
+    private static Text findToolsText(AgentModelConfigSection section) {
+        var children = section.getChildren();
+        for (int i = 0; i < children.length - 1; i++) {
+            if (children[i] instanceof Label l && "Tools (CSV, empty = all):".equals(l.getText())) {
+                return (Text) children[i + 1];
+            }
+        }
+        throw new AssertionError("no tools field in section");
+    }
+
+    /** UI-thread only. The "Preview active tools…" button, or null when the section has no tools field. */
+    private static Button findPreviewButton(AgentModelConfigSection section) {
+        for (var child : section.getChildren()) {
+            if (child instanceof Button b && "Preview active tools…".equals(b.getText())) {
+                return b;
+            }
+        }
+        return null;
     }
 
     /**

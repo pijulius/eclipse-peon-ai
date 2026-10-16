@@ -16,7 +16,7 @@ import org.sterl.llmpeon.tool.component.SmartToolExecutor;
 import org.sterl.llmpeon.tool.tools.ShellTool;
 
 /**
- * Own "agent" for a review which is a plan agent with a system custom prompt
+ * Own "agent" for a review with a system custom prompt and its own model slot (REVIEW, R7)
  */
 public class AiReviewAgent extends AbstractAgent {
 
@@ -44,17 +44,17 @@ public class AiReviewAgent extends AbstractAgent {
 
     @Override
     public org.sterl.llmpeon.ai.AgentConfig getConfig() {
-        return configuredModel.getConfig().planAgentConfig();
+        return configuredModel.getConfig().reviewAgentConfig();
     }
 
     @Override
     public boolean isThinkSupported() {
-        return !ThinkResolver.isOff(configuredModel.getConfig().modelConfigFor(AgentModelConfig.PLAN).think());
+        return !ThinkResolver.isOff(configuredModel.getConfig().modelConfigFor(AgentModelConfig.REVIEW).think());
     }
 
     @Override
     public String getAgentModelName() {
-        return configuredModel.getConfig().modelConfigFor(AgentModelConfig.PLAN).model();
+        return configuredModel.getConfig().modelConfigFor(AgentModelConfig.REVIEW).model();
     }
 
     @Override
@@ -65,16 +65,21 @@ public class AiReviewAgent extends AbstractAgent {
     @Override
     public boolean setAgentModelName(String modelName) {
         var cfg = configuredModel.getConfig();
-        var plan = cfg.modelConfigFor(AgentModelConfig.PLAN);
-        if (Objects.equals(modelName, plan.model())) return false;
-        this.configuredModel.updateConfig(cfg.withModelConfig(AgentModelConfig.PLAN, plan.withModel(modelName)));
+        var review = cfg.modelConfigFor(AgentModelConfig.REVIEW);
+        if (Objects.equals(modelName, review.model())) return false;
+        this.configuredModel.updateConfig(cfg.withModelConfig(AgentModelConfig.REVIEW, review.withModel(modelName)));
         return true;
     }
 
     @Override
-    protected Predicate<SmartToolExecutor> getToolFilter() {
+    protected String toolAllowlistSlot() {
+        return AgentModelConfig.REVIEW;
+    }
+
+    @Override
+    protected Predicate<SmartToolExecutor> classFilter() {
         // R-TF-1: Shell is Da Dok's only whitelist exception — review diagnosis needs git/build/test runs.
-        return super.getToolFilter().and(t -> !t.getTool().isEditTool() || t.getTool() instanceof ShellTool);
+        return super.classFilter().and(t -> !t.getTool().isEditTool() || t.getTool() instanceof ShellTool);
     }
 
     @Override

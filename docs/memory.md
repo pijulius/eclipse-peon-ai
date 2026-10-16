@@ -1,50 +1,52 @@
-# Session-Stand — 2026-10-13 (main→Branch-Merge + Docs-Cleanup done)
+# Session-Stand — 2026-10-16 (Zyklus abgeschlossen: Review-Fixes + Symbole S1/S2 + Paul-WIP-Merge)
 
-> Achtung: docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts
-> im Chat, Jon schreibt. (Da Mek hatte 2026-09-27 memory.md überschrieben — nicht wiederholen.)
+> docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts im Chat.
 
-## AKTUELL 2026-10-13: Merge + Docs-Cleanup ✅
+## Zyklus-Ergebnis (2026-10-16, Branch `story/agent-tool-config`)
 
-- **Merge main INTO `bug/grep-empty-payload-test`:** `d5c87548` (Eltern `0ba9bcc7` + `2968ede2`),
-  keine Konflikte. main brachte: **Fix #142** (`includeAllDependencies` raus, jakarta.annotation
-  Range, Target 2026-09→**2025-12**, Recovery-Guide + `clear-stale-platform-bundles.ps1`, Tags
-  2.12.4/2.12.5). **Nicht gepusht** — Push wartet auf den Docs-Cleanup-Commit.
-- **Docs-Cleanup (Jon, ungepushed):**
-  - index.md: Duplikat „Tool-Result-Size" (❌-Rest + ✅) → ❌ gelöscht; „Offene User-Entscheidungen"
-    → `release-2026-09-06` als erledigt vermerkt (Inhalte verifiziert in main, Da Mek).
-  - open-points.md: Duplikat test_project-Fixture (2×) → konsolidiert (1×, mit Da-Mek-Empfehlung);
-    Issue-#142-✅-Sektion und API-Fehler-✅-Sektion → nach resolved-points.md verschoben.
-  - resolved-points.md: +3 Zeilen (#142 gefixt, API-Fehler gebaut, release-2026-09-06 erledigt).
-- **Offen aus dem letzten Stand (unverändert):** Paul-Smoke R-AEM + R-TD-5 · `planImplemented`
-  (Archiv) · Merge branch→main = Paul · Docs-Commit + Push (wird jetzt nachgeholt).
+1. **Externes Review getriagt:** stale Punkte (resolved-points-Zeile, no-IO-Assertion) waren schon
+   erledigt; connectServers-Package-Private-Befund faktisch falsch (Test in anderem Package); restliche
+   validen Punkte eingebaut.
+2. **Inc A ✅ `35146c40`** — R-ATC-10 ✅ Suffix-Wildcard einheitlich (`stripWildcard` Allow+Deny),
+   4 Tests + Mutation-Nachweis, Homepage 3 Sektionen + Review-Doc-Edits. Gates 1114/0 + 350/0.
+3. **Inc B ✅ `17d1763c`** — `ToolService.activeNames(classFilter, nameFilter)` als einzige
+   Preview-Quelle; AbstractAgent + SearchAgentTool delegieren; +2 Tests. Gates 1116/0 + 350/0.
+4. **Inc C ✅ `2ff69adb`** — Pauls DiskGrepTool-Fix abgesichert: 5 Tests (Red-Nachweis), C-EXT-Decision
+   (effectiveExtension), grepDirectory List. Gates 1121/0 + 350/0. **🔍 = Search/Grep damit gebaut.**
+5. **Eclipse-Path-Resolution (Paul-WIP):** SOLL = resolveInEclipse(path, Optional<IProject>) Reihenfolge
+   1) selektiertes Projekt 2) Workspace-Root 3) offene Projekte (+`src/`-Fallback); Miss-Disclosure
+   bewusst VERWORFEN („nicht überengineieren"); `volatile currentProject` = richtiger Thread-Safety-Fix.
+6. **Tool-Output-Symbole ✅ (icons.md, Paul entschieden 2026-10-16):**
+   - 🔍 Search/Grep — gebaut (`2ff69adb` Disk + Eclipse-Seite jetzt auch committed); Da Sniffa freigegeben.
+   - 📜 Read — **S1 ✅ `2209215e`** (nur diskReadFile+eclipseReadFile, rot-erst, Hunk-Staging).
+   - 🗜 Compact — **S2 ✅ `e216f00d`** (`TOOL_MESSAGE_PREFIX`-Konstante, Start/Skip/Fail/Result-Zeilen
+     + AbstractAgent:373; AIChatView TABU-frei via Konstante). Gates 1126/0 + PDE 351/0.
+   - Da-Dok-Review: **ACCEPTED**. Präexistenter 🗜 in ToolService.java:246 (R-CC) als „präexistent" notiert.
+   - **S3 ❌ offen, JETZT UNBLOCKED:** 🗜 auch in PoDelegateTool:188-200 (3 Branches) + AgentsTool:296-300;
+     PoDelegateTest:256 anpassen.
+7. **Docs-Flips + Hausarbeiten (alle pushed):** sub-agent-timing.md 🗜-Format, index.md Z.61 „✅ gebaut",
+   icons.md komplett (`97cca6a3`); Plan archiviert `2cf725db` (`overview-done-2026-10-16-16-45.md`);
+   resolve-WIP-Note + skill-impact-Ledger `483a33c3`; AGENTS-Working-Agreement `3b6a10e8`
+   („Docs, die WIP beschreiben, werden trotzdem committed").
+8. **Paul-WIP übernommen ✅ `af658e0f`** (Paul freigegeben, Jon gegen IST geprüft, Gate grün:
+   Plugin-Compile 0 Errors, Surefire 1126/0): resolveInEclipse-Overload (SOLL-konform), volatile
+   currentProject (Grep/Read/Write), 🔍-Präfix EclipseGrepTool:88, PoDelegateTool:253 Space-Fix,
+   ChatMarkdownWidget Import-Sortierung. **Nur die 2 untracked Verzeichnisse (`agent/model/`,
+   `agent/tools/`) bleiben draußen** — Paul: „nur die neuen files nicht".
 
-## Shell-onTool-Laufzeit + Overflow-Batch (2026-09-30/10-01, Branch `bug/grep-empty-payload-test`)
+## Offen (für Paul / nächste Zyklen)
+- **UNBLOCKED, Umsetzung offen:** S3 (🗜 in PoDelegateTool/AgentsTool) + EclipseGrepTool
+  IFile-Disclosure-Fix (C-EXT-Pendant, open-points) — beide warten nur noch auf Freigabe als Arbeit.
+- ❓ `PeonAiService.current()`-Umbau (Supplier/DI) — open-points, Entscheidung offen (Paul).
+- Merge → main + Release-Notes + Paul-Smoke (R-AEM/R-TD-5) = Paul.
+- Lint: testRoots muss BEIDE Bäume scannen (core + `org.sterl.llmpeon.test/src`); docRoots = DIRECTORY
+  `["docs"]`, root = Disk-Pfad.
 
-- R-TD-5 ✅ `bc975abd` (Shell-onTool-Dauer, stopped-Pfad via stats-Move, Paul-Smoke offen).
-- Overflow-Batch ✅: `0be9a4c5` R-RS · `d7cf6578` R-OD-6 · `4f7cab05` R-CC-17 · `53e54c5e` R-AEM ·
-  Delta `f77cbef0` (R-RS-Nachzug reloadConfig + webFetch; findImplementations = toter Code).
-- Grep/Replace-Guards ✅ (`9c709187`, `ef140197`, `7edf7afc`), replaceLines-Fix `e97ef512`,
-  Descriptions `0be24315`. Letzter Commit vor Merge: `bc975abd` (gepusht).
-
-## Nächste Schritte
-
-1. Da Mek: docs/** committen + pushen (Merge `d5c87548` + Cleanup).
-2. **Paul-Smoke:** R-AEM (terminale Fehler → 1× History, Abbruch → keine Insertion) + R-TD-5
-   (`… (4s, 19:54) (1234 chars)` im Terminal-Output).
-3. **Merge branch→main** = Pauls Entscheidung. Danach `planImplemented` für offene Pläne.
-4. **Danach (Paul-Order): Context-Overflow/ContentProvider-Bug-Zyklus** — Thinka 954k
-   (per-Request-Injektion, nicht Agent-Memory), Mek 431005 vs. n_ctx 170240, webFetch 500k.
-   Evidenz: open-points.md ❓ auto-compact. Logs nur mit searchAgent lesen (`.metadata/.log`, GROSS).
-
-## Backlog (Auswahl)
-
-AGENTS-Trim (wartet Paul-GO, inkl. totem „komponenten-architektur"-Link AGENTS.md:43) ·
-TrimService-Story (⏳, nächster Architecture-&-Bug-Sprint) · R-CC-7 + ApiRetry-Fehlerklassen-Tabelle
-(❓, Evidence 5×) · Header-State-Leak · Think-BDD-Lücken (a)–(g) · per-Agent-Provider-Override (❓) ·
-Linter ☠️-Status (❓) · Homepage advanced-configuration.md:53 think-Werte-Mismatch ·
-Homepage peon-po.md ohne Da Dok · Compact-Button ohne Monitor (❓) · Auto-Compact bei Overflow (❓).
-
-## Gelöste Alt-Punkte (dieser Zyklus)
-
-- Paul-Smoke 5 Zyklen ✅ (2026-09-30) · R-CC-15 Nested-Agent-Parent-Memory ✅ gesmoked ·
-  Issue #142 ✅ gefixt (auf main, jetzt auch im Branch) · AGENTS-PO-Dedup ✅ (2 Pässe, mit Paul).
+## Notizen
+- eclipseEditFile verliert param oldString intermittierend; eclipseReplaceLines acted-as-insert 6×
+  heute (L6-Leftover, 🔍-Row, L99-Fragment, Z.64-Duplikat, open-points-L179-Duplikat) → IMMER
+  re-read nach line-based Edit; strukturierte Mehrfach-Edits als Ganzdatei-Write.
+- Paul arbeitet parallel im selben Tree — selektives git add; Gate-Blocker durch fremdes WIP →
+  STOP-AND-ASK.
+- Vorheriger Stand (Night-Cycle 4, 2026-10-15): abgeschlossen, alles gepusht; Offen-Punkte in
+  open-points.md „Night-Cycle 4 — Nachbefunde".
