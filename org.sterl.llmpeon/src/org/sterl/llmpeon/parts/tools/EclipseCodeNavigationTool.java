@@ -76,8 +76,9 @@ public class EclipseCodeNavigationTool extends AbstractEclipseTool {
                 sb.append("\n... ").append(found.size() - MAX_TYPE_RESULTS)
                   .append(" more results. Narrow your search.");
             }
-            onTool("Find type " + typeName + " reading " + found.size() + " results ...");
-            return sb.toString();
+            String result = sb.toString();
+            onTool("Find type " + typeName + " reading " + found.size() + " results ..." + " " + StringUtil.charsSuffix(result));
+            return result;
         } catch (JavaModelException e) {
             throw new RuntimeException("Search failed: " + e.getMessage(), e);
         }
@@ -122,9 +123,10 @@ public class EclipseCodeNavigationTool extends AbstractEclipseTool {
                 appendBinarySignatures(sb, type);
             }
 
-            onTool("Reading type " + typeName + " " + projectName + (StringUtil.hasValue(source) ? " source" : " binary"));
-            
-            return sb.toString();
+            String result = sb.toString();
+            onTool("Reading type " + typeName + " " + projectName + (StringUtil.hasValue(source) ? " source" : " binary")
+                    + " " + StringUtil.charsSuffix(result));
+            return result;
         } catch (JavaModelException e) {
             throw new RuntimeException("Read source failed: " + e.getMessage(), e);
         }
@@ -219,8 +221,10 @@ public class EclipseCodeNavigationTool extends AbstractEclipseTool {
                 sb.append("\n... capped at ").append(MAX_REFERENCE_RESULTS)
                   .append(" results. Narrow with a project name.");
             }
-            onTool("Reading references of " + target.getElementName() + " found " + matches.size() + " matches.");
-            return sb.toString();
+            String result = sb.toString();
+            onTool("Reading references of " + target.getElementName() + " found " + matches.size() + " matches."
+                    + " " + StringUtil.charsSuffix(result));
+            return result;
         } catch (Exception e) {
             throw new RuntimeException("Reference search failed: " + e.getMessage(), e);
         }
@@ -258,71 +262,23 @@ public class EclipseCodeNavigationTool extends AbstractEclipseTool {
             throw new RuntimeException("Resource search failed: " + e.getMessage(), e);
         }
 
-        onTool("Search for " + namePattern + " found " + matches.size() + " matches in " + projects.size() + " projects ");
-        
+        String result;
         if (matches.isEmpty()) {
-            return "No resources found matching '" + namePattern + "' in following projects: " 
+            result = "No resources found matching '" + namePattern + "' in following projects: " 
                     + projects.stream().map(p -> p.getName()).collect(Collectors.joining(", "));
-        }
-        var sb = new StringBuilder();
-        matches.forEach(p -> sb.append(p).append("\n"));
-        if (matches.size() >= MAX_REFERENCE_RESULTS) {
-            sb.append("\n... capped at ").append(MAX_REFERENCE_RESULTS)
-              .append(" results. Narrow with a project name or more specific pattern.");
-        }
-
-        return sb.toString();
-    }
-
-    // -------------------------------------------------------------------------
-    // Tool 5: Find implementations
-    // -------------------------------------------------------------------------
-
-    /*
-    @Tool("Java: Find implementations/subclasses of a type - use this before glob.")
-    public String eclipseFindImplementations(
-            @P(description = "fully qualified interface or class name", name = "typeName") String typeName,
-            @P(name = "projectName") String projectName) {
-
-        ArgsUtil.requireNonBlank(typeName, "typeName");
-
-        try {
-            var typeOpt = JdtUtil.findType(typeName, projectName);
-
-            if (typeOpt.isEmpty()) {
-                onProblem("Cannot find implementation of unknown type " + typeName);
-                return "Type not found: " + typeName + ". Use findJavaType to find the correct name.";
-            }
-            IType type = typeOpt.get();
-
-            ITypeHierarchy hierarchy = type.newTypeHierarchy(getProgressMonitor());
-            IType[] subtypes = hierarchy.getAllSubtypes(type);
-
-            
-            onTool("Reading implementations " + subtypes.length + " of " + typeName);
-            if (subtypes.length == 0) {
-                return "No implementations found for: " + typeName + ".";
-            }
+        } else {
             var sb = new StringBuilder();
-            sb.append("Found ").append(subtypes.length).append(" implementation(s) of ")
-              .append(typeName).append(":\n\n");
-            for (int i = 0; i < Math.min(subtypes.length, MAX_IMPL_RESULTS); i++) {
-                IType sub = subtypes[i];
-                sb.append(JdtUtil.kindOf(sub)).append(" ")
-                  .append(sub.getFullyQualifiedName())
-                  .append(" @ ").append(JdtUtil.pathOf(sub)).append("\n");
+            matches.forEach(p -> sb.append(p).append("\n"));
+            if (matches.size() >= MAX_REFERENCE_RESULTS) {
+                sb.append("\n... capped at ").append(MAX_REFERENCE_RESULTS)
+                  .append(" results. Narrow with a project name or more specific pattern.");
             }
-            if (subtypes.length > MAX_IMPL_RESULTS) {
-                sb.append("\n... ").append(subtypes.length - MAX_IMPL_RESULTS)
-                  .append(" more. Narrow with a project name.");
-            }
-
-            return sb.toString();
-        } catch (JavaModelException e) {
-            throw new RuntimeException("Hierarchy search failed: " + e.getMessage(), e);
+            result = sb.toString();
         }
+        onTool("Search for " + namePattern + " found " + matches.size() + " matches in " + projects.size() + " projects "
+                + " " + StringUtil.charsSuffix(result));
+        return result;
     }
-    */
 
     // -------------------------------------------------------------------------
     // Helpers

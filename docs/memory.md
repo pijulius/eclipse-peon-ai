@@ -1,41 +1,52 @@
-# Session-Stand — 2026-09-30 (Cleanup + Push, Paul-Smoke ✅)
+# Session-Stand — 2026-10-16 (Zyklus abgeschlossen: Review-Fixes + Symbole S1/S2 + Paul-WIP-Merge)
 
-> Achtung: docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts
-> im Chat, Jon schreibt. (Da Mek hatte 2026-09-27 memory.md überschrieben — nicht wiederholen.)
+> docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts im Chat.
 
-## AKTUELL 2026-09-30: Post-Smoke-Cleanup (Paul-Order)
+## Zyklus-Ergebnis (2026-10-16, Branch `story/agent-tool-config`)
 
-Paul: „smoke war erfolgreich — docs saubermachen und alles pushen — alte pläne löschen — release
-notes in english schreiben."
+1. **Externes Review getriagt:** stale Punkte (resolved-points-Zeile, no-IO-Assertion) waren schon
+   erledigt; connectServers-Package-Private-Befund faktisch falsch (Test in anderem Package); restliche
+   validen Punkte eingebaut.
+2. **Inc A ✅ `35146c40`** — R-ATC-10 ✅ Suffix-Wildcard einheitlich (`stripWildcard` Allow+Deny),
+   4 Tests + Mutation-Nachweis, Homepage 3 Sektionen + Review-Doc-Edits. Gates 1114/0 + 350/0.
+3. **Inc B ✅ `17d1763c`** — `ToolService.activeNames(classFilter, nameFilter)` als einzige
+   Preview-Quelle; AbstractAgent + SearchAgentTool delegieren; +2 Tests. Gates 1116/0 + 350/0.
+4. **Inc C ✅ `2ff69adb`** — Pauls DiskGrepTool-Fix abgesichert: 5 Tests (Red-Nachweis), C-EXT-Decision
+   (effectiveExtension), grepDirectory List. Gates 1121/0 + 350/0. **🔍 = Search/Grep damit gebaut.**
+5. **Eclipse-Path-Resolution (Paul-WIP):** SOLL = resolveInEclipse(path, Optional<IProject>) Reihenfolge
+   1) selektiertes Projekt 2) Workspace-Root 3) offene Projekte (+`src/`-Fallback); Miss-Disclosure
+   bewusst VERWORFEN („nicht überengineieren"); `volatile currentProject` = richtiger Thread-Safety-Fix.
+6. **Tool-Output-Symbole ✅ (icons.md, Paul entschieden 2026-10-16):**
+   - 🔍 Search/Grep — gebaut (`2ff69adb` Disk + Eclipse-Seite jetzt auch committed); Da Sniffa freigegeben.
+   - 📜 Read — **S1 ✅ `2209215e`** (nur diskReadFile+eclipseReadFile, rot-erst, Hunk-Staging).
+   - 🗜 Compact — **S2 ✅ `e216f00d`** (`TOOL_MESSAGE_PREFIX`-Konstante, Start/Skip/Fail/Result-Zeilen
+     + AbstractAgent:373; AIChatView TABU-frei via Konstante). Gates 1126/0 + PDE 351/0.
+   - Da-Dok-Review: **ACCEPTED**. Präexistenter 🗜 in ToolService.java:246 (R-CC) als „präexistent" notiert.
+   - **S3 ❌ offen, JETZT UNBLOCKED:** 🗜 auch in PoDelegateTool:188-200 (3 Branches) + AgentsTool:296-300;
+     PoDelegateTest:256 anpassen.
+7. **Docs-Flips + Hausarbeiten (alle pushed):** sub-agent-timing.md 🗜-Format, index.md Z.61 „✅ gebaut",
+   icons.md komplett (`97cca6a3`); Plan archiviert `2cf725db` (`overview-done-2026-10-16-16-45.md`);
+   resolve-WIP-Note + skill-impact-Ledger `483a33c3`; AGENTS-Working-Agreement `3b6a10e8`
+   („Docs, die WIP beschreiben, werden trotzdem committed").
+8. **Paul-WIP übernommen ✅ `af658e0f`** (Paul freigegeben, Jon gegen IST geprüft, Gate grün:
+   Plugin-Compile 0 Errors, Surefire 1126/0): resolveInEclipse-Overload (SOLL-konform), volatile
+   currentProject (Grep/Read/Write), 🔍-Präfix EclipseGrepTool:88, PoDelegateTool:253 Space-Fix,
+   ChatMarkdownWidget Import-Sortierung. **Nur die 2 untracked Verzeichnisse (`agent/model/`,
+   `agent/tools/`) bleiben draußen** — Paul: „nur die neuen files nicht".
 
-1. **Paul-Smoke ✅ 2026-09-30** für alle 5 Zyklen (R-DEF-9…11, R-THINK-11/12, Default-Inheritance,
-   Model Config Widget, Issue #149) — in Docs markiert: index.md (4 Stellen), per-agent-think.md
-   (R-THINK-4/5), model-config-widget.md, compact.md (R-CC-15), user-context.md,
-   open-points.md (Issue-#149-Punkt 🔒).
-2. **8 Plan-Archive gelöscht** (peon-plan/overview-done-2026-09-26…09-30) — peon-plan/ leer.
-3. **CHANGELOG.md (Englisch) im Repo-Root angelegt** — Paul-Entscheidung: Repo-Root, nächste
-   Version **2.12.4** (Letzter Tag: 2.12.3, 43 Commits seitdem: Think 14, Model-Config/Inheritance
-   21, Housekeeping 8). Keep-a-Changelog-Stil; ältere Releases → GitHub Releases verlinkt.
-4. **Push:** story/issue-149-think (war nur inc-6 `d77ea570` ahead auf origin) — Mek committet
-   CHANGELOG.md + docs/** + peon-plan-Löschungen, dann `git push`. **Merge nach main = Paul**
-   (nicht angeordnet, nicht machen). `release-2026-09-06` existiert nicht mehr (lokal+remote weg).
-   `homepage/.vitepress/dist` ist NICHT tracked — kein stale-Dist-Problem. Keine Stashes.
+## Offen (für Paul / nächste Zyklen)
+- **UNBLOCKED, Umsetzung offen:** S3 (🗜 in PoDelegateTool/AgentsTool) + EclipseGrepTool
+  IFile-Disclosure-Fix (C-EXT-Pendant, open-points) — beide warten nur noch auf Freigabe als Arbeit.
+- ❓ `PeonAiService.current()`-Umbau (Supplier/DI) — open-points, Entscheidung offen (Paul).
+- Merge → main + Release-Notes + Paul-Smoke (R-AEM/R-TD-5) = Paul.
+- Lint: testRoots muss BEIDE Bäume scannen (core + `org.sterl.llmpeon.test/src`); docRoots = DIRECTORY
+  `["docs"]`, root = Disk-Pfad.
 
-## Nächste Schritte
-
-1. **Mek:** Commit (CHANGELOG.md, docs/**, peon-plan-Del) + Push → dann dieser Stand ok.
-2. **Merge nach main** = Pauls Entscheidung (Ansage offen).
-3. **Danach (Paul-Order): Context-Overflow/ContentProvider-Bug-Zyklus** — Thinka 954k nach
-   clearPlan (per-Request-Injektion, nicht Agent-Memory), Mek 431005 vs. n_ctx 170240, webFetch
-   „Reading https://…" = 500k. Evidenz: open-points.md ❓ auto-compact-Eintrag. Logs nur mit
-   searchAgent lesen (runtime-EclipseApplication/.metadata/.log, GROSS).
-4. Backlog: AGENTS-Trim (wartet Paul-GO, inkl. toter „komponenten-architektur"-Skill-Link in
-   AGENTS.md:43) · Scaffold-als-Jon-Delegat (SOLL-Gespräch offen) · TrimService-Story (⏳) ·
-   R-CC-7 · Think-BDD-Lücken (a)–(g) · per-Agent-Provider-Override (❓) · Linter ☠️-Status (❓) ·
-   ApiRetry (memory 21, 5× Evidence, +503 „Loading model") · Homepage advanced-configuration.md:53
-   high/medium/low/minimal vs. Dropdown none…xhigh (präexistente Unschärfe).
-
-## Gelöste Alt-Punkte (dieser Zyklus)
-
-- Paul-Smoke 5 Zyklen ✅ (2026-09-30) — Push/Merge-Pflicht ging an Paul zurück, er will pushen.
-- R-CC-15 Nested-Agent-Parent-Memory ✅ gesmoked.
+## Notizen
+- eclipseEditFile verliert param oldString intermittierend; eclipseReplaceLines acted-as-insert 6×
+  heute (L6-Leftover, 🔍-Row, L99-Fragment, Z.64-Duplikat, open-points-L179-Duplikat) → IMMER
+  re-read nach line-based Edit; strukturierte Mehrfach-Edits als Ganzdatei-Write.
+- Paul arbeitet parallel im selben Tree — selektives git add; Gate-Blocker durch fremdes WIP →
+  STOP-AND-ASK.
+- Vorheriger Stand (Night-Cycle 4, 2026-10-15): abgeschlossen, alles gepusht; Offen-Punkte in
+  open-points.md „Night-Cycle 4 — Nachbefunde".

@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -37,7 +38,7 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
 
     private static final ILog LOG = Platform.getLog(EclipseWorkspaceReadFileTool.class);
 
-    private IProject currentProject;
+    private volatile IProject currentProject;
 
     public void setCurrentProject(IProject currentProject) {
         this.currentProject = currentProject;
@@ -51,7 +52,7 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
     @Tool("Open a workspace file, not directory, in the Eclipse editor to show it to the user e.g. a plan or summary.")
     public String eclipseOpenFileInEditor(@P(description = "workspace-relative path", name = "filePath") String filePath) {
         ArgsUtil.requireNonBlank(filePath, "filePath");
-        var resource = EclipseUtil.resolveInEclipse(filePath);
+        var resource = EclipseUtil.resolveInEclipse(filePath, Optional.ofNullable(currentProject));
         if (resource.isEmpty()) {
             onProblem("No eclipse file found for " + filePath);
             return "Cannot open: no file found at '" + filePath + "'. Use searchWorkspaceFiles to find the correct path.";
@@ -63,8 +64,9 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
         }
         try {
             PlatformUI.getWorkbench().getDisplay().asyncExec(() -> EclipseUtil.openInEditor(file));
-            onTool("Opened file in editor: " + filePath);
-            return "Opened: " + filePath;
+            String result = "Opened: " + filePath;
+            onTool("Opened file in editor: " + filePath + " " + StringUtil.charsSuffix(result));
+            return result;
         } catch (Exception e) {
             throw new RuntimeException("Could not open editor for " + filePath, e);
         }
@@ -102,18 +104,19 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
         if (startLine == null) startLine = 0;
         if (endLine == null) endLine = 0;
 
-        var file = EclipseUtil.resolveInEclipse(filePath);
+        var file = EclipseUtil.resolveInEclipse(filePath, Optional.ofNullable(currentProject));
         if (file.isPresent() && file.get() instanceof IFile f) {
             var lines = "";
             if (startLine > 0 && endLine > 0) lines = " from " + startLine + " to " + endLine;
-            onTool("Reading eclipse" + lines + " file " + filePath);
             String content;
             try {
                 content = f.readString();
             } catch (CoreException e) {
                 throw new IllegalArgumentException(e.getMessage(), e);
             }
-            return  FileLines.extract(content, startLine, endLine);
+            String result = FileLines.extract(content, startLine, endLine);
+            onTool("📜 Reading eclipse" + lines + " file " + filePath + " " + StringUtil.charsSuffix(result));
+            return result;
         }
         onProblem("No eclipse file found for " + filePath);
         return "No eclipse file found for '" + filePath + "' use searchWorkspaceFiles to find the correct file name and path.";
@@ -150,8 +153,6 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
             searchScope(scope, matcher, limit, matches);
         }
 
-        onTool("Search workspace " + StringUtil.trimToEmpty(projectName) + " for " + query 
-                + " returned " + matches.size() + " results.");
         String suffix = null;
         if (matches.isEmpty()) {
             var searchedScope = project.map(IProject::getName)
@@ -159,7 +160,10 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
             suffix = "Searched: " + searchedScope + " · pattern: " + matcher.getPattern() + "\n"
                     + "Use findJavaType for Java classes or " + LIST_WORKSPACE_NAME + " to explore the project structure. Try a wildcard e.g. *folder*FileName*.java or grepWorkspaceFiles for content search.";
         }
-        return AiReponseBuilder.searchComplete(new ArrayList<>(matches.values()), limit, suffix);
+        String result = AiReponseBuilder.searchComplete(new ArrayList<>(matches.values()), limit, suffix);
+        onTool("Search workspace " + StringUtil.trimToEmpty(projectName) + " for " + query 
+                + " returned " + matches.size() + " results." + " " + StringUtil.charsSuffix(result));
+        return result;
     }
 
     private void searchScope(List<IProject> scope, StringMatcher matcher, int limit,
@@ -219,7 +223,7 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
             return t.eclipseListAllOpenProjects();
         }
 
-        var resource = EclipseUtil.resolveInEclipse(path);
+        var resource = EclipseUtil.resolveInEclipse(path, Optional.ofNullable(currentProject));
         if (resource.isEmpty()) {
             throw new IllegalArgumentException("Directory not found: " + path);
         }
@@ -240,9 +244,9 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
                     entries.add(prefix + pathToAdd);
                 }
             }
-            onTool("List directories for " + path + " found " + entries.size() + " elements.");
-            if (entries.isEmpty()) return "Directory is empty: " + path;
-            return String.join("\n", entries);
+            String result = entries.isEmpty() ? "Directory is empty: " + path : String.join("\n", entries);
+            onTool("List directories for " + path + " found " + entries.size() + " elements." + " " + StringUtil.charsSuffix(result));
+            return result;
         } catch (CoreException e) {
             throw new RuntimeException("Failed to list " + path, e);
         }

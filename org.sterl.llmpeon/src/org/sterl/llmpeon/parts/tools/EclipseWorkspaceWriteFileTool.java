@@ -1,5 +1,6 @@
 package org.sterl.llmpeon.parts.tools;
 
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -20,13 +21,14 @@ import org.sterl.llmpeon.shared.ArgsUtil;
 import org.sterl.llmpeon.shared.FileLines;
 import org.sterl.llmpeon.shared.FileUtils;
 import org.sterl.llmpeon.shared.QualifiedPathValidator;
+import org.sterl.llmpeon.shared.StringUtil;
 
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 
 public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
 
-    private IProject currentProject;
+    private volatile IProject currentProject;
 
     public void setCurrentProject(IProject project) {
         this.currentProject = project;
@@ -99,7 +101,7 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
         ArgsUtil.requireNonNull(newContent, "newContent");
         validateWrite(filePath);
 
-        var inFile = EclipseUtil.resolveInEclipse(filePath);
+        var inFile = EclipseUtil.resolveInEclipse(filePath, Optional.ofNullable(currentProject));
         if (inFile.isEmpty() || !(inFile.get() instanceof IFile eclipseFile)) {
             throw new IllegalArgumentException("Cannot write unknown file in eclipse " + filePath);
         }
@@ -118,7 +120,7 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
         }
     }
 
-    @Tool("Replace all occurrences of an exact string in a workspace file; oldString is required, min 3 non-whitespace chars; reports how many were replaced. newString=null deletes the matches.")
+    @Tool("Replace exact, whitespace-sensitive occurrences in a file. oldString must uniquely identify the target in its line context; if it matches multiple locations, all are replaced. Min 3 non-whitespace chars; reports count. newString=null deletes.")
     public String eclipseEditFile(
             @P(description = "workspace-relative path", name = "filePath") String filePath,
             @P(description = "exact text to replace", name = "oldString", required = false) String oldString,
@@ -127,7 +129,7 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
         validateWrite(filePath);
         if (newString == null) newString = "";
 
-        var inFile = EclipseUtil.resolveInEclipse(filePath);
+        var inFile = EclipseUtil.resolveInEclipse(filePath, Optional.ofNullable(currentProject));
         if (inFile.isEmpty() || !(inFile.get() instanceof IFile eclipseFile)) {
             throw new IllegalArgumentException("Cannot write unknown file in eclipse " + filePath);
         } else {
@@ -153,7 +155,7 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
         ArgsUtil.requireNonNull(content, "content");
         validateWrite(filePath);
 
-        var inFile = EclipseUtil.resolveInEclipse(filePath);
+        var inFile = EclipseUtil.resolveInEclipse(filePath, Optional.ofNullable(currentProject));
         if (inFile.isPresent() && inFile.get() instanceof IFile eclipseFile) {
             IoUtils.writeFile(eclipseFile, content, getProgressMonitor());
             onTool("Overwrite file " + JdtUtil.pathOf(eclipseFile));
@@ -199,7 +201,7 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
         ArgsUtil.requireNonNull(newContent, "newContent");
         validateWrite(filePath);
 
-        var inFile = EclipseUtil.resolveInEclipse(filePath);
+        var inFile = EclipseUtil.resolveInEclipse(filePath, Optional.ofNullable(currentProject));
         if (inFile.isEmpty() || !(inFile.get() instanceof IFile eclipseFile)) {
             throw new IllegalArgumentException("Cannot write unknown file in eclipse " + filePath);
         }
@@ -221,11 +223,11 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
         validateWrite(sourcePath);
         validateWrite(targetPath);
 
-        var source = EclipseUtil.resolveInEclipse(sourcePath);
+        var source = EclipseUtil.resolveInEclipse(sourcePath, Optional.ofNullable(currentProject));
         if (source.isEmpty()) throw new IllegalArgumentException("Not found: " + sourcePath);
 
         var resource = source.get();
-        if (EclipseUtil.resolveInEclipse(targetPath).isPresent()) {
+        if (EclipseUtil.resolveInEclipse(targetPath, Optional.ofNullable(currentProject)).isPresent()) {
             throw new IllegalArgumentException("Target already exists: " + targetPath);
         }
 
@@ -236,7 +238,7 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
             ensureParentFolders(workspaceRoot, destPath);
             resource.move(destPath, IResource.KEEP_HISTORY, getProgressMonitor());
             var result = "Renamed " + JdtUtil.pathOf(resource) + " -> " + destPath.toPortableString();
-            onTool(result);
+            onTool(result + " " + StringUtil.charsSuffix(result));
             return result;
         } catch (CoreException e) {
             throw new RuntimeException("Failed to rename " + sourcePath + " -> " + targetPath, e);
@@ -254,12 +256,12 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
         validateWrite(sourcePath);
         validateWrite(targetPath);
 
-        var source = EclipseUtil.resolveInEclipse(sourcePath);
+        var source = EclipseUtil.resolveInEclipse(sourcePath, Optional.ofNullable(currentProject));
         if (source.isEmpty()) throw new IllegalArgumentException("Not found: " + sourcePath);
 
         var resource = source.get();
         if (!(resource instanceof IFile)) throw new IllegalArgumentException("Not a file: " + sourcePath);
-        if (EclipseUtil.resolveInEclipse(targetPath).isPresent()) {
+        if (EclipseUtil.resolveInEclipse(targetPath, Optional.ofNullable(currentProject)).isPresent()) {
             throw new IllegalArgumentException("Target already exists: " + targetPath);
         }
 
@@ -270,7 +272,7 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
             ensureParentFolders(workspaceRoot, destPath);
             resource.copy(destPath, IResource.KEEP_HISTORY, getProgressMonitor());
             var result = "Copied " + JdtUtil.pathOf(resource) + " -> " + destPath.toPortableString();
-            onTool(result);
+            onTool(result + " " + StringUtil.charsSuffix(result));
             return result;
         } catch (CoreException e) {
             throw new RuntimeException("Failed to copy " + sourcePath + " -> " + targetPath, e);
@@ -296,7 +298,7 @@ public class EclipseWorkspaceWriteFileTool extends AbstractEclipseTool {
         ArgsUtil.requireNonBlank(filePath, "filePath");
         validateWrite(filePath);
 
-        var file = EclipseUtil.resolveInEclipse(filePath);
+        var file = EclipseUtil.resolveInEclipse(filePath, Optional.ofNullable(currentProject));
         if (file.isEmpty()) return "Not found: " + filePath;
 
         try {

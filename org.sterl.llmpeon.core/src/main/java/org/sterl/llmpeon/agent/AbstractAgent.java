@@ -23,6 +23,7 @@ import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.shared.StringUtil;
 import org.sterl.llmpeon.tool.ToolLoopRequest;
+import org.sterl.llmpeon.tool.ToolPolicy;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
 
@@ -113,19 +114,67 @@ public abstract class AbstractAgent implements AiAgent {
     }
 
     /**
-     * Apply only static filters to tools -- any change kills the KV cache!
-     * https://github.com/ggml-org/llama.cpp/issues/22746#issuecomment-4630455537
+     * The agent slot whose stored tool allowlist ({@code llm.agent.<id>.tools}) applies to this
+     * agent; {@code null} = no allowlist (all tools). Dev/Plan/PO/Review override with their slot.
      */
-    protected Predicate<SmartToolExecutor> getToolFilter() {
-        return p -> true;
+    protected String toolAllowlistSlot() {
+        return null;
     }
 
     /**
-     * Filters tools by name — applied to MCP tools, which {@link #getToolFilter()} cannot see.
-     * Default: allow all. Overridden by custom agents to enforce their tool allowlist.
+     * Class-based tool restriction (e.g. no edit tools for Plan). The stored allowlist can only
+     * NARROW this set, never widen it: the effective filter is {@code classFilter ∧ allowlist}.
+     */
+    protected Predicate<SmartToolExecutor> classFilter() {
+        return t -> true;
+    }
+
+    /**
+     * The ONE composition (R-ATC-8): the runtime filter and the preview both build on it —
+     * the class filter AND the allowlist parsed from the given raw CSV.
+     */
+    private Predicate<SmartToolExecutor> filterFor(String rawCsv) {
+        var allow = ToolPolicy.nameFilter(rawCsv);
+        var cls = classFilter();
+        return exec -> cls.test(exec) && allow.test(exec.getSpec().name());
+    }
+
+    /**
+     * Filters the built-in tools this agent may call. The allowlist is read <b>per call</b> from
+     * the live config — persistent agents are NOT rebuilt on a config change (R-ATC-7), so a
+     * per-call read is the only way a stored allowlist takes effect without a restart.
+     *
+     * <p>The set only changes on config changes (like any tool-set change) and stays stable
+     * within a session — the KV-cache caveat still applies to config edits:
+     * https://github.com/ggml-org/llama.cpp/issues/22746#issuecomment-4630455537
+     */
+    protected Predicate<SmartToolExecutor> getToolFilter() {
+        return filterFor(storedAllowlist());
+    }
+
+    /**
+     * Filters tool names — applied to MCP specs, which {@link #getToolFilter()} cannot see;
+     * together both apply the allowlist to ALL tools (built-in + MCP, R-ATC-6). Read per call
+     * like {@link #getToolFilter()}.
      */
     protected Predicate<String> getToolNameFilter() {
-        return n -> true;
+        return ToolPolicy.nameFilter(storedAllowlist());
+    }
+
+    /** The stored raw CSV for this agent's slot; {@code null} when the slot is unset or the key absent. */
+    private String storedAllowlist() {
+        var slot = toolAllowlistSlot();
+        return slot == null ? null : configuredModel.getConfig().toolAllowlist(slot);
+    }
+
+    /**
+     * Preview (R-ATC-8): the sorted names of ALL tools (built-in + MCP) that would be active for the
+     * GIVEN raw CSV — via the shared {@link ToolService#activeNames(Predicate, Predicate)}, the exact
+     * composition the runtime filter uses, so the preview can never drift from what the agent
+     * actually sends. The CSV is the value the user typed, not necessarily the stored one.
+     */
+    public List<String> resolveActiveTools(String rawCsv) {
+        return toolService.activeNames(classFilter(), ToolPolicy.nameFilter(rawCsv));
     }
 
     /** Reuses {@link #getToolFilter()} so it matches exactly what the agent sends at runtime. */
@@ -321,7 +370,7 @@ public abstract class AbstractAgent implements AiAgent {
             var compactCfg = configuredModel.getConfig().compactAgentConfig();
             // R-CC-14: the service is monitor-free — the start line is emitted by the agent
             // (all five triggers funnel through here), same wording as before
-            monitor.onTool("Compressing conversation " + messages.size() + " messages "
+            monitor.onTool("🗜 Compressing conversation " + messages.size() + " messages "
                     + ChatMessageUtil.estimateTokens(messages) + " tokens"
                     + (compactCfg.getModel() == null ? "" : " using " + compactCfg.getModel()));
             var result = new CompactService(configuredModel).compact(

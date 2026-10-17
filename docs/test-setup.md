@@ -104,6 +104,32 @@ separat aus — „0 skipped" ist derzeit nicht maschinell verifizierbar~~ **auf
 auch für Ignored mit `Result.IGNORED`; Maven-Semantik: „Tests" = total inkl. skipped).
 Sichtbar ab dem ersten Lauf nach Eclipse-Restart (Report-Formatierung im laufenden Bundle).
 
+## R6 ✅ done — Cap-Test ohne 120 Seed-Dateien (2026-10-15, Paul; `9cec5945` — ECJ-Cap-Fakt im Bau verifiziert)
+
+**IST:** `EclipseBuildToolTest.buildReportCappedAt100WithDisclosure` schreibt 120 kaputte
+`.java`-Dateien ins Fixture und triggert einen echten Build, um >100 Marker zu erzeugen. In einem
+degradierten Workspace (Recovery-State nach „unsaved changes" der Vornacht) liefert derselbe Build
+nur 2 Marker → der Test rotet ohne Produktfehler (Morgen-Run 2026-10-15).
+
+**SOLL:** Der Cap-Test erzeugt seine >100 Problem-Marker **ohne** 120 Seed-Dateien und so, dass das
+Ergebnis nicht vom Zustand des Runtime-Workspaces abhängt. **Gebaute Mechanik (2026-10-15):** drei
+Seed-Dateien (`CapSeedA/B/C.java`) mit je 40 unabhängigen Fehlern (`int e<i> = missing<i>;` je Zeile
+→ ein Marker je Fehlerzeile). **ECJ-Fakt (im Bau verifiziert, CompilerOptions.java:1614):**
+`maxProblemsPerUnit = 100` — der Eclipse-Compiler cappt Probleme **pro Compilation-Unit**, deshalb
+genau 3 × 40 statt 1 × 120 (eine Datei mit 120 Fehlern lief exakt 100 Marker). Die Behauptung des
+Tests ändert sich nicht: >100 Marker → Report cappt bei 100 mit Disclosure (`showing 100 of 120`).
+
+**WEIL:** Der Test prüft die Cap-/Disclosure-Logik des Tools, nicht die Build-Engine — ein echter
+Build über 120 Dateien bindet das Ergebnis an einen fremden Zustand, den der Test nicht kontrolliert.
+
+```
+GIVEN das Fixture trägt deterministisch >100 Problem-Marker (Seed-Mechanik ohne 120 Dateien)
+WHEN der Build-Report gelesen wird
+THEN der Report zeigt genau 100 Einträge und nennt die Disclosure („showing 100 of N")
+```
+→ `EclipseBuildToolTest.buildReportCappedAt100WithDisclosure` (Seed-Mechanik ersetzt, Name bleibt
+aussagekräftig; Maven Surefire bleibt die Ground Truth für die Zählung).
+
 ## Mock-LLM-Server — verifizierte Wire-Formate (Night-Cycle A, 2026-08-30)
 
 `MockLlmServer` bildet die Provider-Drähte nach; die Formate sind gegen den **echten
@@ -133,3 +159,35 @@ Projekt-Scope der Type-Suche ist damit wirkungslos und fällt still auf die work
 Suche durch (korrekt wäre `JavaCore.create(p.get())`). Bestand bereits vor diesem Zyklus
 (Historie März/Mai 2026), passt thematisch zu R4a in
 [eclipse-read-tools.md](eclipse-read-tools.md) → dort fixen.
+
+## OSGi-Tests via Maven (headless)
+
+Befehl (Repo-Root):
+- lokal (macOS, mit Display): `mvn -B clean verify --file pom.xml`
+- CI (Linux, ohne Display): `xvfb-run -a mvn -B clean verify --file pom.xml`
+  ([pipeline.md](pipeline.md); xvfb ist für SWT-Pfade nötig, die ein X-Display anfordern —
+  nicht für die 44 Skips unten)
+
+Der Tycho-`verify` baut Plugin + Test-Bundle und startet den OSGi-Test-Run (tycho-surefire,
+`useUIHarness=false` → headless OSGi **ohne Workbench**). Das Fixture `test_project` kommt über
+die System-Property `peon.test.project` (im Test-Pom gesetzt).
+
+Erwartete Zahlen (verifiziert 2026-10-15, ~45 s warm):
+
+| Modul | Tests run | Fail | Err | Skipped |
+|---|---|---|---|---|
+| llmpeon-core (surefire) | 1110 | 0 | 0 | 0 |
+| org.sterl.llmpeon.test (Tycho-OSGi) | 350 | 0 | 0 | 44 |
+
+**Kein stiller Skip (verifiziert 2026-10-15):** kein `skipTests`/`excludes`/`testFailureIgnore`
+in irgendeinem pom; 44 × `TEST-*.xml` unter `org.sterl.llmpeon.test/target/surefire-reports`
+belegen die Ausführung im echten OSGi-Framework. „Skipped" zählt **in** „Tests run" — real
+executed = 306.
+
+**Bekannte Skips (44, by-design):** die 6 SWT-UI-Klassen extenden `AbstractSwtUiTest`
+(`setUpDisplay` fängt `IllegalStateException: Workbench has not been created yet` →
+`Assume.assumeNoException`) und laufen **nur im PDE-Runner** (echte Workbench):
+AiConfigPreferenceViewTest (13) · AgentModelConfigSectionTest (11) · ModelConfigWidgetTest (9) ·
+ModelComboWidgetTest (7) · AiAdvancedPreferenceViewTest (3) · HeaderRosterStructureTest (1).
+Workspace-Assumes (`EclipseBuildToolTest`, `PeonAiServiceTest`) skippen unter Maven **nicht** —
+das Fixture wird auch im OSGi-Run importiert.

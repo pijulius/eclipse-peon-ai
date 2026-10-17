@@ -48,12 +48,19 @@ public class LlmConfig {
     @Default
     private final String model = null;
     /**
-     * Per-agent model configs keyed by agent id ({@code dev}/{@code po}/{@code plan}/{@code search}/{@code compact}).
+     * Per-agent model configs keyed by agent id ({@code dev}/{@code po}/{@code plan}/{@code review}/{@code search}/{@code compact}).
      * Immutable; missing entries resolve to {@link AgentModelConfig#empty()}. The dev model is the base
      * {@link #model} (no separate dev model key).
      */
     @Default
     private final Map<String, AgentModelConfig> modelConfigs = Map.of();
+    /**
+     * Per-agent tool allowlists keyed by agent id — the raw CSV value of
+     * {@code llm.agent.<id>.tools}, kept uninterpreted (parsing lives in
+     * {@link org.sterl.llmpeon.tool.ToolPolicy}). Missing entry = key absent = all tools.
+     */
+    @Default
+    private final Map<String, String> agentTools = Map.of();
     @NonNull
     @Default
     private final Duration timeout = Duration.ofMinutes(3);
@@ -170,6 +177,14 @@ public class LlmConfig {
         return modelConfigs.getOrDefault(agentId, AgentModelConfig.empty());
     }
 
+    /**
+     * The raw CSV tool allowlist for the given agent slot ({@code llm.agent.<id>.tools});
+     * {@code null} = key absent = all tools.
+     */
+    public String toolAllowlist(String agentId) {
+        return agentTools.get(agentId);
+    }
+
     /** A copy with the given agent's model config replaced (null removes the entry). */
     public LlmConfig withModelConfig(String agentId, AgentModelConfig config) {
         var updated = new LinkedHashMap<>(modelConfigs);
@@ -228,6 +243,14 @@ public class LlmConfig {
         return agentBuilder(plan).model(resolveModel(plan.model()))
                 .id(AgentModelConfig.PLAN)
                 .think(resolveThink(plan)).build();
+    }
+
+    /** Review agent (Da Dok) — own slot; a blank model inherits the base model, not the plan slot (R7). */
+    public AgentConfig reviewAgentConfig() {
+        var review = modelConfigFor(AgentModelConfig.REVIEW);
+        return agentBuilder(review).model(resolveModel(review.model()))
+                .id(AgentModelConfig.REVIEW)
+                .think(resolveThink(review)).build();
     }
 
     /** Compactor — configuration from its own record (empty model inherits the base model, R-DEF-1). */

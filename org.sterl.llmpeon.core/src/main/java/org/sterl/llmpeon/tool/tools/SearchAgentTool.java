@@ -1,6 +1,7 @@
 package org.sterl.llmpeon.tool.tools;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.function.Predicate;
 
 import org.sterl.llmpeon.ai.AgentModelConfig;
@@ -8,6 +9,7 @@ import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.prompt.PromptLoader;
 import org.sterl.llmpeon.shared.ArgsUtil;
 import org.sterl.llmpeon.shared.StringUtil;
+import org.sterl.llmpeon.tool.ToolPolicy;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
 
@@ -35,6 +37,15 @@ public class SearchAgentTool extends AbstractTool {
         this.toolService = toolService;
     }
 
+    /**
+     * Preview (R-ATC-8): the sorted names of ALL tools (built-in + MCP) that would be active for the
+     * GIVEN raw CSV — the same filter the sub-loop sends, so the preview can never drift from the
+     * runtime. The CSV is the value the user typed, not necessarily the stored one.
+     */
+    public List<String> resolveActiveTools(String rawCsv) {
+        return toolService.activeNames(filter, ToolPolicy.nameFilter(rawCsv));
+    }
+
     @Tool(name = "searchAgent", value = "Sub-agent for complex multi-step search/research - to save tokens.")
     public String searchAgent(@P(name = "prompt") String prompt) {
         ArgsUtil.requireNonBlank(prompt, "prompt");
@@ -45,10 +56,14 @@ public class SearchAgentTool extends AbstractTool {
 
             var cfg = this.request.getConfig();
             var modelName = cfg.modelConfigFor(AgentModelConfig.SEARCH).model();
+            // The sub-loop is parent-independent: its allowlist comes from the SEARCH slot, not
+            // from the parent agent (toBuilder would inherit the parent's toolNameFilter, R-CC-15).
+            var allow = ToolPolicy.nameFilter(cfg.toolAllowlist(AgentModelConfig.SEARCH));
 
             var request = this.request.toBuilder()
                 .staticMessages(Arrays.asList(system))
-                .toolFilter(filter)
+                .toolFilter(filter.and(exec -> allow.test(exec.getSpec().name())))
+                .toolNameFilter(allow)
                 .memory(messages)
                 .agentConfig(cfg.searchAgentConfig())
                 // R-CC-15: never inherit the parent agent — a sub-loop compactSession would
@@ -63,9 +78,10 @@ public class SearchAgentTool extends AbstractTool {
             response = toolService.executeLoop(request.build());
             long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000;
 
-            onTool("Da Sniffa done. (" + StringUtil.humanElapsed(elapsedMillis) + ")");
             String answer = response != null ? response.aiMessage().text() : null;
-            return StringUtil.hasValue(answer) ? answer : "Search completed but returned no result";
+            String result = StringUtil.hasValue(answer) ? answer : "Search completed but returned no result";
+            onTool("Da Sniffa done. (" + StringUtil.humanElapsed(elapsedMillis) + ")" + " " + StringUtil.charsSuffix(result));
+            return result;
 
         } catch (Exception e) {
             onProblem("SearchAgent error: " + e.getMessage());

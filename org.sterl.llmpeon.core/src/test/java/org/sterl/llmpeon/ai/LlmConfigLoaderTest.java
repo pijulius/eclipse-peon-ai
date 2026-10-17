@@ -154,6 +154,18 @@ class LlmConfigLoaderTest {
         assertThat(config.modelConfigFor(AgentModelConfig.PLAN).model()).isEqualTo("gpt-5");
     }
 
+    @Test
+    void missingReviewKeysYieldEmptySlot() {
+        var store = new MapLlmConfigStore();
+        store.put(LlmConfigKeys.agentKey(AgentModelConfig.PLAN, LlmConfigKeys.AGENT_FIELD_MODEL), "gpt-5");
+
+        var config = LlmConfigLoader.load(store);
+
+        assertThat(config.getModelConfigs()).containsKey(AgentModelConfig.REVIEW);
+        assertThat(config.modelConfigFor(AgentModelConfig.REVIEW)).isEqualTo(AgentModelConfig.empty());
+        assertThat(config.modelConfigFor(AgentModelConfig.PLAN).model()).isEqualTo("gpt-5");
+    }
+
     // UC-THINK-9
     @Test
     void loaderFallsBackToDefaultsOnMissingKeys() {
@@ -164,6 +176,23 @@ class LlmConfigLoaderTest {
         assertThat(config.getMaxTokens()).isZero();
         assertThat(config.getAutoCompactAfter()).isEqualTo(80_000);
         assertThat(config.shouldWeSendThinkingBackToLLM()).isTrue();
+    }
+
+    @Test
+    void loadAgentToolsRawCsvPerSlot() {
+        // GIVEN raw CSV allowlists for two slots, one of them with surrounding whitespace
+        var store = new MapLlmConfigStore();
+        store.put(LlmConfigKeys.agentKey(AgentModelConfig.PLAN, LlmConfigKeys.AGENT_FIELD_TOOLS), " eclipse , !debugJava* ");
+        store.put(LlmConfigKeys.agentKey(AgentModelConfig.REVIEW, LlmConfigKeys.AGENT_FIELD_TOOLS), "eclipse");
+
+        // WHEN the config is loaded
+        var config = LlmConfigLoader.load(store);
+
+        // THEN the raw values survive (trimmed, uninterpreted) and the other slots stay absent
+        assertThat(config.toolAllowlist(AgentModelConfig.PLAN)).isEqualTo("eclipse , !debugJava*");
+        assertThat(config.toolAllowlist(AgentModelConfig.REVIEW)).isEqualTo("eclipse");
+        assertThat(config.toolAllowlist(AgentModelConfig.DEV)).isNull();
+        assertThat(config.toolAllowlist(AgentModelConfig.PO)).isNull();
     }
 
     @Test
