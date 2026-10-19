@@ -18,6 +18,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.eclipse.core.resources.ResourcesPlugin;
@@ -29,6 +30,7 @@ import org.junit.Test;
 import org.sterl.llmpeon.StreamMock;
 import org.sterl.llmpeon.agent.AiAgent;
 import org.sterl.llmpeon.agent.AiDevAgent;
+import org.sterl.llmpeon.agent.model.TaggedResult;
 import org.sterl.llmpeon.agent.AiPlanAgent;
 import org.sterl.llmpeon.agent.AiReviewAgent;
 import org.sterl.llmpeon.ai.AgentModelConfig;
@@ -39,7 +41,9 @@ import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.UserContext;
 import org.sterl.llmpeon.memory.FileAgentHistoryStore;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
+import org.sterl.llmpeon.mcp.CodegraphProbe;
 import org.sterl.llmpeon.parts.PeonConstants;
+import org.sterl.llmpeon.parts.ai.CodegraphConnectionService;
 import org.sterl.llmpeon.parts.ai.PeonAiService;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
 import org.sterl.llmpeon.parts.tools.AskUserTool;
@@ -412,7 +416,10 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         aiService.call("Rückfrage", null);
         streamMock.assertCount(plan, 1);
         streamMock.assertCount("Handover from", 1);
-        streamMock.assertCount("peon-plan/overview.md", 1);
+        // R-TR-3: the plan path is in the handover message AND in the freshly-injected
+        // Plan-Ref block — the start-line dedupKey does not match the handover's bare-path
+        // mention (no false-positive), so the reference is re-injected on the second turn.
+        streamMock.assertCount("peon-plan/overview.md", 2);
     }
     
     @Test
@@ -901,7 +908,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         }
     }
 
-    // UC-TF-2
+    // UC-TF-1
     @Test
     public void daDokMatrixNeverPrivileged() {
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
@@ -949,7 +956,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
                 activeToolNames(uiStandalone).contains("askUser"));
     }
 
-    // UC-TF-3
+    // UC-TF-2
     @Test
     public void searchAgentFilterHidesPlanTools() {
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
@@ -1317,11 +1324,12 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             var jon = svc.getActiveAgent();
             var ctx = jon.getStaticContext();
             assertEquals(1, ctx.size());
-            assertContains(ctx.get(0).render(), "prefer eclipse*"); // Env
+            assertContains(ctx.get(0).render().body(), "prefer eclipse*"); // Env
 
             // AND: no memory snapshot and no file items in the static context
             var forbidden = List.of(memoryText, "docs/memory.md", "docs/index.md");
-            var rendered = ctx.stream().map(ContextItem::render).filter(r -> r != null).toList();
+            var rendered = ctx.stream().map(ContextItem::render).filter(r -> r != null)
+                    .map(TaggedResult::body).toList();
             forbidden.forEach(f -> assertHasNoMessageWith(rendered, f));
 
             // AND: the slaves get a COPY of Jon's context + exactly one name item (R-N1), leak-free
@@ -1345,12 +1353,13 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertNotSame("slaves must get a copy, not Jon's list object", jonContext, slaveContext);
         assertEquals(jonContext.size() + 1, slaveContext.size());
         for (int i = 0; i < jonContext.size(); i++) {
-            assertEquals(jonContext.get(i).render(), slaveContext.get(i).render());
+            assertEquals(jonContext.get(i).render().body(), slaveContext.get(i).render().body());
         }
-        var nameItem = slaveContext.get(jonContext.size()).render();
+        var nameItem = slaveContext.get(jonContext.size()).render().body();
         assertContains(nameItem, "Your name is " + uiName);
         assertContains(nameItem, AiPoAgent.AGENT_MODE);
-        var rendered = slaveContext.stream().map(ContextItem::render).filter(r -> r != null).toList();
+        var rendered = slaveContext.stream().map(ContextItem::render).filter(r -> r != null)
+                .map(TaggedResult::body).toList();
         forbidden.forEach(f -> assertHasNoMessageWith(rendered, f));
     }
     /**
@@ -1404,7 +1413,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             // THEN: the new custom agent carries Env in its static context (system prompt) — no memory
             var custom = svc.getAgentService().get("TestAgent").orElseThrow();
             var ctx = custom.getStaticContext();
-            assertContains(ctx.get(0).render(), "prefer eclipse*"); // Env
+            assertContains(ctx.get(0).render().body(), "prefer eclipse*"); // Env
 
             // AND: the original callback fired AFTER the re-bake
             assertEquals("baked", callbackState.get());
@@ -1764,6 +1773,51 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
     }
 
     /**
+     * R-CG-7 (Negativ-Guard): kein .codegraph-Index ⇒ keine Codegraph-Zeile in der Projekt-Info
+     * (keine Kontext-Blähung). Die Probe wird negativ gestubbt: unter R-CG-2 würde der
+     * Walk-up den Repo-Root-Index finden, weil das OSGi-Test-Workspace im Repo liegt
+     * (das Fixture-Projekt selbst hat keinen Index).
+     */
+    // R-CG-7
+    @Test
+    public void givenNoCodegraphInFixture_whenTurn_thenProjectInfoHasNoCodegraphLine() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN: Fixture-Projekt ohne .codegraph-Index — Probe negativ gestubbt (synchron angewendet)
+        var codegraph = aiService.getCodegraphConnectionService();
+        codegraph.setProbe(noIndexProbe());
+        codegraph.apply();
+        assertEquals(CodegraphConnectionService.Kind.OFF, codegraph.state().kind());
+        assertTrue("OFF reason must mention codegraph: " + codegraph.state().reason(),
+                codegraph.state().reason().contains("codegraph"));
+
+        // WHEN: der Turn-Context wird gebaut
+        var projectInfo = aiService.getUserContext().get().stream()
+                .filter(i -> ("Project info " + project.getName()).equals(i.label()))
+                .findFirst();
+
+        // THEN: die Projekt-Info existiert, aber ohne Codegraph-Zeile
+        assertTrue("project info item expected", projectInfo.isPresent());
+        assertFalse("no codegraph line without an index: " + projectInfo.get().render(),
+                projectInfo.get().render().body().contains("Codegraph index active"));
+    }
+
+    /** Negative probe: neither binary nor index (R-CG-7 premise — the fixture has no index). */
+    private static CodegraphProbe noIndexProbe() {
+        return new CodegraphProbe() {
+            @Override
+            public Optional<Path> findBinary() {
+                return Optional.empty();
+            }
+
+            @Override
+            public Optional<Path> findIndexWorkDir(Path projectDiskPath) {
+                return Optional.empty();
+            }
+        };
+    }
+
+    /**
      * Revision ADR-0032 (2026-08-23): the slaves' SYSTEM message carries Env only — the shared
      * memory reaches them via the delegate tool's turn orders (first user message of the slave).
      * Fixture is persisted BEFORE the service build and reset in the finally (deterministic,
@@ -1815,6 +1869,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             var devRendered = delegate.getDevSlave().getStaticContext().stream()
                     .map(ContextItem::render)
                     .filter(r -> r != null)
+                    .map(TaggedResult::body)
                     .toList();
             assertHasMessageWith(devRendered, "prefer eclipse*"); // Env
             assertHasNoMessageWith(devRendered, memoryText);

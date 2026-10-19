@@ -10,11 +10,9 @@ import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 import org.jspecify.annotations.NonNull;
-import org.sterl.llmpeon.compact.CompactConstants;
+import org.sterl.llmpeon.compact.HandleToolLoopCompactComponent;
 import org.sterl.llmpeon.exception.ExceptionUtil;
-import org.sterl.llmpeon.mcp.McpServerConfig;
 import org.sterl.llmpeon.mcp.McpService;
-import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.shared.StringUtil;
 import org.sterl.llmpeon.tool.component.SmartToolExecutor;
 import org.sterl.llmpeon.tool.model.ToSimpleMessage;
@@ -41,6 +39,12 @@ import lombok.extern.slf4j.Slf4j;
  * Owns all tools and the tool registry.
  * Tools are stable instances — only the context changes when the user selects a different file/project.
  *
+ * <p>ADR-0069: MCP groups are ADOPTED, never owned — {@link #adoptMcpGroup} registers an
+ * already-connected {@link McpService} under a group name, and {@code disconnectMcp} only
+ * detaches this registry. The owner (the connection service) creates, connects and closes the
+ * service; this registry never does, so one service can be adopted into several registries
+ * without duplicating or leaking the process.
+ *
  * https://github.com/langchain4j/langchain4j/blob/main/docs/docs/tutorials/tools.md
  */
 @Slf4j
@@ -60,8 +64,11 @@ public class ToolService {
             Stop thinking and take action now: either call a tool, ask a clarifying question,
             or provide your answer directly.""";
 
-    private McpService mcpService;
-    private List<ToolSpecification> mcpToolSpecs = List.of();
+    /** ADR-0068: named MCP groups — the user-config group plus built-ins (e.g. "codegraph").
+     *  ADR-0069: public because the connection services adopt into / detach this group by name. */
+    public static final String USER_GROUP = "user";
+    private final Map<String, McpService> mcpGroups = new ConcurrentHashMap<>();
+    private volatile List<ToolSpecification> mcpToolSpecs = List.of();
 
     public ToolService() {
         this(true);
@@ -142,15 +149,23 @@ public class ToolService {
         int iterations = 0;
         boolean shouldLoop = true;
         int stuck = 0;
+        // R-CC-18: one compact-decision component per loop — the per-turn flag must not leak
+        // into sub-loops or the next turn (ADR-0070)
+        var compactHandler = new HandleToolLoopCompactComponent();
 
         do {
             var messages = new ArrayList<ChatMessage>(toOneSystemMessage(req.staticMessages));
             req.getMemory().addMemoryTo(messages);
 
             var agentConfig = req.getAgentConfig();
+            var specs = toolSpecifications(req);
+            // R-CC-15: the honest fallback binds to "this tool set does not offer compactSession"
+            // — a non-empty set WITHOUT it must take the fallback, not the hint
+            var hasCompactTool = specs.stream()
+                    .anyMatch(spec -> CompactSessionTool.NAME.equals(spec.name()));
             var builder = ChatRequest.builder()
                     .messages(messages)
-                    .parameters(agentConfig.newRequestParameters(toolSpecifications(req)));
+                    .parameters(agentConfig.newRequestParameters(specs));
 
             req.getMonitor().onChatMessage(++iterations, builder);
             response = req.call(builder.build());
@@ -175,18 +190,9 @@ public class ToolService {
                 stuck = 0; // reset on productive tool use
                 var tR = runAllTools(response, req);
                 req.getMemory().addResult(response, tR);
-                if (ranTool(response, CompactSessionTool.NAME)) {
-                    if (req.isCompactedThisTurn()) {
-                        // The compact-request's provider usage describes the PRE-compact context —
-                        // re-derive the counter from the new (small) memory
-                        req.getMemory().reevaluateTokens();
-                        var agent = req.getAgent();
-                        if (agent != null) {
-                            req.staticMessages(agent.buildStaticMessages(req.getMonitor()));
-                        }
-                    }
-                    // SKIPPED_SMALL / FAILED_EMPTY: the real counter value stays (R-CC-2)
-                } else addCompactHintIfNeeded(req, response, false);
+                // R-CC-18: the state-based decision runs after EVERY tool round — over budget the
+                // component compacts directly, in the band it hints (one implementation, ADR-0070)
+                compactHandler.handle(req, hasCompactTool);
 
             } else if (hasResponseMessage) {
                 stuck = 0; // reset on productive response
@@ -200,52 +206,12 @@ public class ToolService {
                 req.getMemory().add(AiMessage.from(response.aiMessage().thinking()));
                 req.monitor.onProblem("AI hangs - only thinking returned times: " + stuck);
                 if (stuck > MAX_STUCK_ITERATIONS) break;
-                if (stuck > MAX_STUCK_ITERATIONS - 2) addCompactHintIfNeeded(req, response, true);
+                if (stuck > MAX_STUCK_ITERATIONS - 2) compactHandler.forceHint(req, hasCompactTool); // R-CC-18: force bypasses off-switch + band
                 else req.addMessage(new UserMessage(STUCK_MESSAGE));
             }
         } while (shouldLoop && !req.monitor.isCanceled());
 
         return response;
-    }
-
-    private static boolean ranTool(ChatResponse response, String toolName) {
-        return response.aiMessage().toolExecutionRequests().stream()
-                .anyMatch(tr -> toolName.equals(tr.name()));
-    }
-
-    private void addCompactHintIfNeeded(ToolLoopRequest req, ChatResponse response, boolean force) {
-        var memory = req.getMemory();
-        // R-CC-8: the hint only makes sense with a real history — at ≤ MIN_COMPACT_MESSAGES the
-        // compact would skip anyway (old gate: < 10)
-        if (memory.size() <= CompactConstants.MIN_COMPACT_MESSAGES) return;
-        var compactLimit = req.getConfig().getAutoCompactAfter();
-        if (compactLimit <= 0 && !force) return;
-        var shouldCompact = force || memory.getTotalTokenUsed() > compactLimit * 0.95;
-        if (!shouldCompact) return;
-
-        // R-CC-15: per-request check — the registry is parent-wide, but the hint may only fire
-        // when THIS loop's tool set actually offers compactSession; otherwise the honest fallback
-        var hasCompactTool = toolSpecifications(req).stream()
-                .anyMatch(spec -> CompactSessionTool.NAME.equals(spec.name()));
-        var agent = req.getAgent();
-        if (agent == null || !hasCompactTool) {
-            // avoid that a search agent or any other agent without a compact tools get stuck
-            final var msg = "Your context window is almost full and cannot be compacted. " +
-                    "Stop calling tools now and give your best final answer with what you have so far.";
-            if (!memory.containsMessage(msg)) {
-                req.addMessage(new UserMessage(msg));
-                AiMonitor.nullSafety(req.monitor).onTool("Info for search agent added to return now a result, context full: " + memory.getTotalTokenUsed());
-            }
-        } else {
-            // R-CC-4: one hint per memory — a cleared memory (successful compact) re-arms it
-            if (memory.containsMessage(COMPACT_HINT)) return;
-            var used = memory.getTotalTokenUsed() + " tokens of " + compactLimit + " used.";
-            String agentName = agent.getName();
-            // R-CC-10: the diagnosis rides on the onTool LOG line only — the UserMessage below must
-            // stay clean (it becomes LLM context; the diagnosis is not for the model).
-            AiMonitor.nullSafety(req.monitor).onTool("🗜 Compact hint for " + agentName + " added! " + used + memory.tokenDiagnosis());
-            req.addMessage(new UserMessage(COMPACT_HINT + System.lineSeparator() + used));
-        }
     }
 
     private List<ToolExecutionResultMessage> runAllTools(ChatResponse response, ToolLoopRequest req) {
@@ -285,12 +251,15 @@ public class ToolService {
         var executor = toolExecutors.get(tr.name());
         var monitor = req.getMonitor();
         String result;
-        var isMcpTool = executor == null && mcpService != null && mcpService.hasTool(tr.name());
+        var mcpGroupService = executor == null ? findMcpService(tr.name()) : null;
+        var isMcpTool = mcpGroupService != null;
         if (isMcpTool) {
             monitor.onTool("Running MCP: " + tr.name() + " - " + tr.arguments());
-            result = mcpService.executeTool(tr);
+            result = mcpGroupService.executeTool(tr);
+            monitor.onTool("MCP " + tr.name() + " done. " + StringUtil.charsSuffix(result));
             log.debug("MCP Tool {} result size: {}", tr.name(), result == null ? "null" : result.length());
-            return ToolExecutionResultMessage.from(tr, result);
+            // R-RS-3: a null result is an honest empty for the LLM (langchain4j rejects null message text)
+            return ToolExecutionResultMessage.from(tr, result == null ? "" : result);
         } else if (executor == null) {
             result = "Error: unknown tool '" + tr.name() + "' check spelling";
             monitor.onProblem(result);
@@ -301,26 +270,43 @@ public class ToolService {
     }
 
     /**
-     * Connects to all given MCP servers and makes their tools available in the tool loop.
-     * Disconnects any previously active MCP connection first.
-     * Throws if any server fails to connect.
+     * ADR-0069: registers an already-connected McpService under the given group name.
+     * The registry ADOPTS the connection — it never closes it. disconnectMcp(group) only
+     * detaches this registry; the owner (connection service) closes the service.
+     * Re-adopting a group name replaces the previous entry WITHOUT closing it.
      */
-    public void connectMcp(List<McpServerConfig> servers) {
-        disconnectMcp();
-        if (servers == null || servers.isEmpty()) return;
-        var service = new McpService(servers);
-        service.connect(); // throws on failure
-        this.mcpService = service;
-        this.mcpToolSpecs = service.getToolSpecifications();
+    public void adoptMcpGroup(String group, McpService service) {
+        mcpGroups.put(group, service);
+        refreshMcpSpecs();
     }
 
-    /** Disconnects the active MCP service and removes its tools from the tool loop. */
+    /** Rebuilds the tool-spec union across all groups — deterministic: group names sorted, then spec order. */
+    private void refreshMcpSpecs() {
+        var union = new ArrayList<ToolSpecification>();
+        mcpGroups.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(entry -> union.addAll(entry.getValue().getToolSpecifications()));
+        this.mcpToolSpecs = union;
+    }
+
+    /** First group (sorted by name) that owns the tool name — tool names are unique across groups. */
+    private McpService findMcpService(String toolName) {
+        return mcpGroups.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(Map.Entry::getValue)
+                .filter(service -> service.hasTool(toolName))
+                .findFirst()
+                .orElse(null);
+    }
+
+    /** Detaches the user-group MCP connection from this registry (never closes the service — ADR-0069). */
     public void disconnectMcp() {
-        this.mcpToolSpecs = List.of();
-        if (mcpService != null) {
-            mcpService.disconnect();
-            mcpService = null;
-        }
+        disconnectMcp(USER_GROUP);
+    }
+
+    /** Detaches the named group (map entry + spec union). NEVER closes the McpService (ADR-0069). */
+    public void disconnectMcp(String group) {
+        if (mcpGroups.remove(group) != null) refreshMcpSpecs();
     }
 
     /**

@@ -39,7 +39,8 @@ neu gebaut, nachdem ich eine Nachricht sende."
   flushed der Prefix-Cache bei jedem Compact ohnehin, weil System-Prompt + Memory vor dem Rest
   der History stehen. Ein Datumswechsel ändert nur zusätzlich die gerenderten Static-Context-Zeilen
   (Env/Datum im Prompt-Body). Verifizieren: Refresh der System-Message direkt nach In-Loop-Compact
-  (im executeLoop-Zweig `ranTool(CompactSessionTool.NAME)`) — Aufwand klein, aber Änderung im
+  (der Tool-Pfad `CompactSessionTool`, seit R-CC-18 merkerfrei — die Folgen hängen am Ausführenden) —
+  Aufwand klein, aber Änderung im
   Loop-Request-Path → erst bewerten.
 
 **Entscheidung (User 2026-09-11): Fix gebaut — R-ST4 „System-Message-Rebuild nach In-Loop-Compact" — ✅ done (`a89cdc6`)**
@@ -117,26 +118,30 @@ System-Prompt rebuild nach Clear fehlt (KV Cache Invalidate + Rebuild).
 
 ```java
 interface ContextItem {
-    /** Renders the full text (header + content). Null = nothing to inject → skip. */
-    String render();
+    /** Renders the block (TaggedResult); null = nothing to inject → skip.
+     *  The block text is injected EXACTLY as rendered — no prefix, no suffix. */
+    @Nullable TaggedResult render();
 
-    /** "Loading 📋" status label — File-Items: voller Pfad. Default: null (lädt still). */
+    /** "Loading 📋" status label — File-Items: voller Pfad. Default: null (lädt still).
+     *  Feuert nur, wenn wirklich etwas injiziert wurde. */
     default String label() { return null; }
 
     /**
-     * Dedup-Identifier, contains-Check über UserMessages, VOR dem Read.
-     * File-Items: exakter Header "<voller Pfad>:\n---\n" (System.lineSeparator()) —
-     * eine Summary kann den Pfad erwähnen, aber praktisch nie exakt den Header.
+     * Dedup-Identifier, contains-Check über UserMessages, VOR dem Read:
+     * die exakte Start-Zeile des Blocks (TaggedResult.PREFIX + head).
+     * Eine Summary kann den Pfad erwähnen, aber praktisch nie exakt den Block-Start.
      * Default: null → Dedup über den gerenderten Content.
      */
     default String dedupKey() { return null; }
 }
 ```
 
-**Drei Methods** (2026-08-16): `label()` = Pfad für den "Loading 📋"-Status,
-`dedupKey()` = Header (mit Trenner) für die Dedup — zwei Größen, zwei Aufgaben.
+**Drei Methods** (2026-08-16, Block-Form seit 2026-10-18): `label()` = Pfad für den "Loading 📋"-Status,
+`dedupKey()` = Start-Zeile des Blocks für die Dedup — zwei Größen, zwei Aufgaben.
 Der alte Bug: contains-Check auf den bloßen Pfad → False-Positive gegen
-Compact-Summaries.
+Compact-Summaries. Warum ein Block und nicht „Header + Text": der Block macht den Absender im Text
+sichtbar und ist der **einzige** Klassifikationsschlüssel des Compact —
+[tagged-results.md](tagged-results.md).
 
 ## Implementierungen
 
@@ -144,18 +149,19 @@ Compact-Summaries.
 // Core — Disk-basiert (headless-testbar)
 class DiskFileContextItem implements ContextItem {
     private final Path path;
-    @Override String render() {
-        return Files.readString(path);
+    @Override TaggedResult render() {
+        return new TaggedResult("context: " + path, Files.readString(path));
     }
+    @Override String dedupKey() { return TaggedResult.PREFIX + "context: " + path; }
 }
 
 // Plugin — Eclipse-VFS-basiert
 class EclipseFileContextItem implements ContextItem {
     private final String relativePath;
     private final IProject project;
-    @Override String render() {
+    @Override TaggedResult render() {
         IFile file = project.getFile(relativePath);
-        return new String(file.getContents());
+        return new TaggedResult("context: " + file.getFullPath(), new String(file.getContents()));
     }
 }
 ```
@@ -274,18 +280,21 @@ Request) + Stale-Projects-Bug (System-Prompt/`lastModified`-Cache überlebten de
 
 1. **Datei fehlt → `null` → übersprungen.** `render()` gibt bei fehlender Datei/Projekt `null`
    zurück; es wird nichts injiziert, kein "Loading"-Eintrag, keine Exception.
-2. **Dedup nach `dedupKey()`, nie nach Content — Header-Check vor dem Read.** Der Injektions-Check
-   prüft **zuerst** nur `dedupKey()` = Header (`<voller Pfad>:\n---\n`) in der History: Header da →
-   übersprungen. Der Check ist exakt auf den **Header-String mit Trenner** — eine Compact-Summary
-   kann den Pfad *erwähnen*, aber nicht den exakten Header → kein False-Positive (Bugfix
-   2026-08-16, vorher: contains-Check auf den bloßen Pfad).
+2. **Dedup nach `dedupKey()`, nie nach Content — Start-Zeilen-Check vor dem Read.** Der Injektions-Check
+   prüft **zuerst** nur `dedupKey()` = **Start-Zeile des Blocks** (`//-- Start context: <voller Pfad>`,
+   [tagged-results.md](tagged-results.md)) in der History: da → übersprungen. Der Check ist exakt auf
+   diese Zeile — eine Compact-Summary kann den Pfad *erwähnen*, aber nicht den Block-Start → kein
+   False-Positive (Bugfix 2026-08-16, vorher: contains-Check auf den bloßen Pfad; Block-Form seit
+   2026-10-18).
    Die Datei wird **gar nicht erst gelesen** (kein Payload-Load, kein `render()`). Content-Änderungen
    an der Datei lösen **keine** Neu-Injection aus — die Änderungen stehen ohnehin als Tool-Messages
    in der History. Neu injiziert (und dann erst gelesen) wird nur bei **anderem Pfad**
    (Projektwechsel) oder **nach Compact**.
-3. **Header = voller Workspace-Pfad.** File-Items rendern als `<voller Pfad>:\n---\n<content>`
-   (wie `AgentsMdContextItem`); der "Loading 📋"-Status zeigt denselben Pfad — so ist im Status
-   erkennbar, aus welchem Projekt eine Datei kommt.
+3. **Block-Head = voller Workspace-Pfad.** File-Items rendern als getaggter Block
+   `//-- Start context: <voller Pfad>` / `<content>` / `//-- End context: <voller Pfad>`;
+   der "Loading 📋"-Status zeigt denselben Pfad — so ist im Status erkennbar, aus welchem Projekt
+   eine Datei kommt. Der Block geht **exakt** so in die Memory (kein Präfix davor), damit der
+   Compact ihn als reinen Kontext-Block erkennt.
 4. **Datei-Items leben im `turnContextSupplier`.** AGENTS.md + AGENTS-\<agent\>.md (alle Agenten
    inkl. Slaven), Jons `docs/memory.md` + `docs/index.md`, Plan-Datei. Der System-Prompt hält nur
    noch die statischen OS/Date-Regeln.
@@ -427,7 +436,8 @@ Marker-Asserts), Button-Render manuell (SWT, R-UI1-Präzedenz).
 
 ## Compact-Hint für Agenten ohne CompactSessionTool (2026-09-16, Paul, `29a341b`)
 
-**Regel: Ein Fast-voll-Hinweis bricht nie still ab.** In `ToolService.addCompactHintIfNeeded`
+**Regel: Ein Fast-voll-Hinweis bricht nie still ab.** In
+`HandleToolLoopCompactComponent.fallbackHint` (seit R-CC-18; vorher `ToolService.addCompactHintIfNeeded`)
 bekommen Agenten **ohne** `CompactSessionTool` (z. B. Sklaven ohne Compact-Zugang) beim Erreichen
 der Hinweis-Schwelle die explizite Meldung „Your context window is almost full and cannot be
 compacted. Stop calling tools now…" — vorher wurde dort stillschweigend `return`t (kein Signal,

@@ -8,7 +8,10 @@ idPrefix: CC
 > · R-CC-8/9 **✅ done** (2026-09-25, Inc 3/3.1, Da Dok Review ACCEPTED)
 > · R-CC-10 **✅ done** (2026-09-26, `138a2ea`) · R-CC-11…14 **✅ done** (2026-09-26,
 > Nachbau-Review, `414edf4`→`d3e8833`)
-> · R-CC-7 **🚧 in design** (Retry/Fehlerklassen, zusammen mit ApiRetry-Tabelle).
+> · R-CC-7 **🚧 in design** (Retry/Fehlerklassen, zusammen mit ApiRetry-Tabelle)
+> · R-CC-18 **✅ done** (2026-10-18 specified / 2026-10-19 gebaut: vollen Context direkt compacten
+> statt auf den Hint zu warten — siehe unten; `26a0007c` + `c9463119`, Surefire core 1214/0,
+> Da Dok CONCERNS ohne Blocker).
 > **Input-Budget-Regeln (Präfix CIB):** eigenes Doc
 > [compact-input-budget.md](compact-input-budget.md) — ✅ done (2026-09-25, Da Dok ACCEPTED).
 > **Komponente:** eigens core-Package `compact` ([ADR-0056](adr/0056-compact-component-and-render-modes.md)) —
@@ -68,12 +71,13 @@ beim Compact verworfen.
 ### R-CC-1 — Context-Counter misst Input, nie Kosten ✅
 
 `totalTokenUsed` trägt ausschließlich Kontextgröße (Prompt-Input). Provider
-`TokenUsage.inputTokenCount()` wird verwendet (Fallback: Estimate chars×2/7); `totalTokenCount()`
+`TokenUsage.inputTokenCount()` wird verwendet (Fallback: Estimate chars/3); `totalTokenCount()`
 (Kosten) fließt **nie** in den Kontext-Zähler — Header ↑↓ bleibt Kosten (ADR-0004).
 
 - GIVEN Response `TokenUsage(input=1000, output=5000, total=6000)` WHEN `addResult` THEN
-  Zähler wächst um **1000**. *(Test: `ThreadSafeMemoryInputTokenCountTest#countsInputNotTotal`)*
-- GIVEN Response ohne TokenUsage WHEN `addResult` THEN Estimate (chars×2/7). *(Test:
+  Zähler = **1000** + Schätzung der angehängten Messages (R-CC-19) — die 5000 Ausgabe-Tokens
+  fließen **nie** ein. *(Test: `ThreadSafeMemoryInputTokenCountTest#countsInputPlusAppended`)*
+- GIVEN Response ohne TokenUsage WHEN `addResult` THEN Estimate (chars/3). *(Test:
   `ThreadSafeMemoryInputTokenCountTest#fallsBackToEstimate`)*
 
 ### R-CC-2 — Reevaluate nur nach erfolgreichem Compact ✅
@@ -100,9 +104,10 @@ stillen Auto-Compact — nie stiller Abbruch.
 
 ### R-CC-4 — Compact-Hint nur einmal ✅
 
-`addCompactHintIfNeeded` fügt den `COMPACT_HINT` nur hinzu, wenn er nicht bereits in der Memory
-steht (`containsMessage`); nach erfolgreichem Compact (Memory geleert) wieder scharf; forced
-Hint (Stuck-Pfad) unterliegt demselben Dedup.
+`HandleToolLoopCompactComponent` (seit R-CC-18, vorher `ToolService.addCompactHintIfNeeded`) fügt
+den `COMPACT_HINT` nur hinzu, wenn er nicht bereits in der Memory steht (`containsMessage`); nach
+erfolgreichem Compact (Memory geleert) wieder scharf; forced Hint (Stuck-Pfad) unterliegt demselben
+Dedup.
 
 - GIVEN Hint bereits in Memory WHEN erneut feuert THEN genau einmal. *(Test:
   `ToolServiceCompactHintTest#hintIsAddedOnce`)*
@@ -111,8 +116,15 @@ Hint (Stuck-Pfad) unterliegt demselben Dedup.
 
 ### R-CC-6 — Estimate als Estimate gekennzeichnet ✅
 
-Wird der Zähler als Estimate (chars×2/7) bestimmt, zeigt die Anzeige `~N (estimate)` (PoDelegateTool-
+Wird der Zähler als Estimate (chars/3) bestimmt, zeigt die Anzeige `~N (estimate)` (PoDelegateTool-
 Kontext, Roster). Provider-Werte ohne Tilde. *(Test: `ContextCounterDisplayTest#estimateIsDisclosed`)*
+
+**Abgrenzung zu R-CC-19 (2026-10-19):** „Provider-Wert ohne Tilde" gilt für den **unveränderten**
+Provider-Wert. Sobald `addResult` Messages anhängt, trägt der Zähler einen geschätzten Anteil
+(Provider-Input + estimate der angehängten Messages) — dann ist die Tilde die ehrliche Anzeige, auch
+wenn ein Provider-Wert die Basis bildet. Die Provider-Zahl selbst bleibt unverändert der Beobachtungs-
+wert in der Diagnose (R-CC-10). *(Tests: `ContextCounterDisplayTest#estimateIsDisclosed`,
+`ToolServiceCompactResultTest#keepsRealCounterOnFailedCompact`)*
 
 ### R-CC-7 — Compact-Fehler sichtbar + begrenzter Retry 🚧 in design (Paul 2026-09-24)
 
@@ -203,7 +215,7 @@ Stack; LLM erfährt nichts, Header hängt ([header-state-leak.md](header-state-l
 
 ### R-CC-13 ✅ — Token-Mathe zentral in `ChatMessageUtil`, Trim in `ContextTrimComponent` (built `08c9a57`)
 
-- Die Formel (`chars×2/7`) wird **zentral** in `ChatMessageUtil` abgelegt/verwendet; die
+- Die Formel (`chars/3`) wird **zentral** in `ChatMessageUtil` abgelegt/verwendet; die
   Trim-Logik (Stufenkürzung, Caps, letzte User-Message voll) lebt vollständig in
   `ContextTrimComponent`. Keine Doppelhaltung der Mathe, keine Compact-Logik außerhalb der
   Component.
@@ -233,7 +245,7 @@ Response-`inputTokenCount()` → Summe läuft davon). Vor jedem Fix wird gemesse
   1. `memory` — `ThreadSafeMemory.getTotalTokenUsed()` + `isTokenEstimate()` (unser Zähler),
   2. `model` — der letzte provider-gemeldete `inputTokenCount()` (was das Modell beim letzten
      Call **tatsächlich** sah; ohne Modell-Meldung: `n/a`),
-  3. `estimate` — unsere `chars×2/7`-Schätzung über den aktuellen Context.
+  3. `estimate` — unsere `chars/3`-Schätzung über den aktuellen Context.
 - GIVEN Memory meldet 289493 WHEN Modell-Input 80k und Estimate 82k THEN die Skip-/Hint-Zeile
   zeigt alle drei Werte mit Flags (so kann Paul die Quelle der falschen Zahl bestimmen).
 - **Der Fix der Memory-Summe (falls bestätigt) ist ein EIGENER Punkt** — dieser Regel geht nur die
@@ -341,6 +353,86 @@ Compact-only. Sichtbarkeit für den 400-Fall kommt stattdessen über ein neues F
 [open-points.md](open-points.md)): **API-Fehler werden ins Agent-Memory eingefügt**, damit der
 Agent den Abbruch kennt und nachfolgend reagieren kann.
 
+
+### R-CC-18 — Voller Context: Compact direkt statt auf den Hint warten ✅ done (Paul 2026-10-18)
+
+**Anlass:** Der Compact-Hint (R-CC-4) ist eine *Bitte* ans Modell. Ist der Context bereits über dem
+Budget, kommt sie zu spät — der nächste Provider-Call geht unverändert raus und stirbt am
+Modell-Limit. Innerhalb der Tool-Schleife gab es **keinen harten Auslöser**; der Pre-Turn-Gate in
+`AbstractAgent.doCall` greift nur einmal pro Turn, **vor** dem ersten Call.
+
+**Entscheidung ist zustandsbasiert, nicht ereignisbasiert:** geprüft wird nach jeder Tool-Runde,
+unabhängig davon, ob gerade `compactSession` gerufen wurde (im Stuck-Pfad — nur-think-Runden — bleibt
+es beim erzwungenen Hint). Das ersetzt das bisherige
+Ereignis-Gate (`ranTool(compactSession)` + Turn-Merker) ersatzlos.
+
+- **R-CC-18.1 — Direkt:** `used > agent.compactAfterTokens()` (Budget = `autoCompactAfter ×
+  compactFactor`, also das Agent-eigene Budget — Sklaven compacten weiter früher) **und** Memory
+  > `MIN_COMPACT_MESSAGES` ⇒ `agent.compact(monitor)` **direkt** ausführen (R-CC-8 bleibt scharf);
+  danach Zähler re-derived (R-CC-2) und Static neu gebaut. Eine `onTool`-Zeile nennt Anlass +
+  Zahlen, damit der User sieht, warum der Context springt.
+- **R-CC-18.2 — Hint im Band:** `used > 95 %` **und** ≤ Budget ⇒ Hint wie bisher — R-CC-4-Dedup
+  unverändert (einer pro Memory; nach erfolgreichem Compact wieder scharf, weil das Memory geleert
+  wird).
+- **R-CC-18.3 — Sonst nichts:** kein Text, keine Message, kein Log.
+- **R-CC-18.4 — Kein zusätzlicher Text ins LLM-Memory:** die Reinsert-Message trägt bereits
+  `Session compacted:` (R-CC-9), der `onTool`-Report die Zahlen. Ein zweiter Hinweis wäre Rauschen
+  und ein neuer Sonderfall für die Stufenkürzung.
+- **Ein Versuch pro Turn:** liefert der Direkt-Compact `SKIPPED_SMALL` oder `FAILED_EMPTY`, wird er
+  im **selben** Turn nicht wiederholt (sonst ein Compressor-LLM-Call pro Iteration). R-CC-3 bleibt
+  unberührt: der Pre-Turn-Gate versucht es im **nächsten** Turn erneut.
+
+- GIVEN `used` 170001 und Budget 160000 WHEN der nächste Call ansteht THEN ist compactiert, **bevor**
+  der Call rausgeht — der Call trägt die neue, kleine History. *(Test: `directCompactBeforeCall`)*
+- GIVEN der Direkt-Compact liefert `SKIPPED_SMALL`/`FAILED_EMPTY` WHEN die nächste Runde beginnt
+  THEN kein zweiter Direkt-Versuch in diesem Turn. *(Test: `failedDirectCompactIsNotRetriedInTurn`)*
+- GIVEN `used` 155000 (96,9 % von 160000) WHEN die Runde endet THEN Hint, kein Direkt-Compact.
+  *(Test: `hintOnlyInTheBandBelowBudget`)*
+- GIVEN `compactSession` lief in dieser Runde erfolgreich WHEN danach geprüft wird THEN greift keine
+  weitere Regel — der Speicher ist klein (kein Sonder-Gate mehr nötig). *(Test:
+  `afterSuccessfulToolCompactNoRuleFires`)*
+- GIVEN `autoCompactAfter <= 0` (Feature aus) WHEN über Budget THEN kein Direkt-Compact
+  (R-CIB-1-Semantik: 0 = off). *(Test: `directCompactRespectsOffSwitch`)*
+- GIVEN Memory ≤ `MIN_COMPACT_MESSAGES` WHEN über Budget THEN kein Direkt-Compact (R-CC-8) — der
+  Provider-Fehler bleibt der ehrliche Ausgang. *(Test: `directCompactRespectsMinMessages`)*
+
+**Warum der Pre-Turn-Gate in `AbstractAgent.doCall` bleibt:** dort ist die frische User-Message noch
+**nicht** im Memory — sie darf nicht in die Zusammenfassung wandern. Der Gate deckt also den
+Turn-Start ab, R-CC-18 die Call-Folge innerhalb der Schleife. Gleiche Regel, zwei Zeitpunkte, je
+eine Begründung.
+
+**Struktur:** Die Entscheidung liegt in *einer* Komponente (`HandleToolLoopCompactComponent`), und
+die Folgen eines Compacts erledigt, wer ihn ausführt (Tool bzw. Komponente) — der Tool-Loop weiß
+nichts mehr über Compact. Siehe [compact-architektur.md](compact-architektur.md) und
+[ADR-0070](adr/0070-compact-decision-in-one-component.md).
+
+
+### R-CC-19 — Der Zähler ist vorausschauend: Provider-Input **plus** angehängte Messages ✅ done (2026-10-19)
+
+`totalTokenUsed` beschreibt die Kontextgröße **so wie sie jetzt aussieht**, nicht nur den letzten
+Provider-Call: Provider-`inputTokenCount()` des letzten Requests **plus** die chars/3-Schätzung aller
+seither angehängten Messages (AI-Message mit den Tool-Calls — sie geht beim nächsten Request wieder
+mit — und die Tool-Results dieser Runde). `addResult` setzt den Wert nach dem Append,
+`tokenIsEstimate` ist danach `true`; `lastProviderInputTokens`/die Diagnose bleiben unverändert
+(reiner Beobachtungswert, R-CC-10).
+
+**Warum:** der Provider-Wert ist per Definition der **vorige** Request — die Ergebnisse der gerade
+beendeten Tool-Runde fehlen darin. Ein einzelnes großes Tool-Result (200k-`readFile`, breiter
+`grep`) hebt den **nächsten** Request über das Limit, während der Zähler noch unter dem Budget
+steht: der Direkt-Compact (R-CC-18.1) feuert nicht und der Call stirbt am Modell-Limit
+(`exceed_context_size_error`). Dieselbe Fehlerklasse, gegen die R-CC-18 gebaut wurde — R-CC-18
+allein heilt sie nicht, weil es den veralteten Wert liest.
+
+- GIVEN Provider meldet `input=100000` und die Runde hängt 100.000 Zeichen an
+  WHEN danach ein Gate prüft THEN ist `used` ≈ 100.000 + 33.333 (chars/3), nicht 100.000.
+  *(Test: `ThreadSafeMemoryInputTokenCountTest#countsInputPlusAppended`)*
+- GIVEN `used` noch unter Budget, aber `used + angehängte Schätzung` darüber
+  WHEN die Tool-Runde endet THEN kompaktiert R-CC-18.1 direkt.
+  *(Test: `HandleToolLoopCompactComponentTest#countsAppendedMessagesOfTheFinishedRound`)*
+- GIVEN mehrere Runden ohne Provider-Usage (lokales Modell)
+  WHEN `addResult` läuft THEN bleibt der Fallback Estimate über die **ganze** Memory (kein
+  Doppelzählen der bereits geschätzten Messages).
+  *(Test: `ThreadSafeMemoryInputTokenCountTest#estimateFallbackDoesNotDoubleCount`)*
 
 ## Info (2026-09-25, Paul — „China API leak", nur notiert, kein Bau)
 

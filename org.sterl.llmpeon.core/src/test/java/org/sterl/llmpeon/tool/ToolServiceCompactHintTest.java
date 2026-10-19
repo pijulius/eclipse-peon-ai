@@ -152,11 +152,15 @@ class ToolServiceCompactHintTest {
         // WHEN — a tool round crossing the hint threshold
         new ToolService().executeLoop(req);
 
-        // THEN — the hint LOG line carries the diagnosis: memory exact (153000), model = same provider input
+        // THEN — the hint LOG line carries the diagnosis: memory = provider input (153000) + appended
+        // estimate (R-CC-19 → estimate=true), model = same provider input
         assertThat(hints).hasSize(1);
+        var matcher = java.util.regex.Pattern.compile("memory=(\\d+)").matcher(hints.getFirst());
+        assertThat(matcher.find()).isTrue();
+        assertThat(Integer.parseInt(matcher.group(1))).isGreaterThan(153000);
         assertThat(hints.getFirst())
-                .contains("memory=153000(estimate=false)")
                 .contains("model=153000")
+                .contains("(estimate=true)")
                 .contains(" estimate=");
     }
 
@@ -165,7 +169,9 @@ class ToolServiceCompactHintTest {
     @Timeout(10)
     void hintLineShowsMemoryDivergingFromModel() {
         // GIVEN — round 1 reports input 80211; round 2 grows the context with big messages and reports NO
-        // usage, so the counter becomes an estimate that drifts far above the (unchanged) model value
+        // usage, so the counter becomes an estimate that drifts far above the (unchanged) model value.
+        // Per-test budget 210000 (R-CC-18): round 2's estimate (≈200k) must land in the HINT band
+        // (199500 < est ≤ 210000), not over budget — over budget the gate compacts directly.
         var memory = seedMemory(new ThreadSafeMemory(), 10);
         var rounds = new AtomicInteger();
         var cm = new StreamMock().buildMock(r -> switch (rounds.incrementAndGet()) {
@@ -180,9 +186,10 @@ class ToolServiceCompactHintTest {
         var monitor = hintCapturingMonitor(hints);
         var req = ToolLoopRequest.builder()
                 .memory(memory)
-                .chatModel(new ConfiguredChatModel(hintConfig(), cm))
+                .chatModel(new ConfiguredChatModel(
+                        LlmConfig.builder().model("mock").autoCompactAfter(210000).build(), cm))
                 .monitor(monitor)
-                .agent(hintAgent())
+                .agent(divergingAgent())
                 .build();
 
         // WHEN — round 2 crosses the threshold on an estimated (no-usage) counter
@@ -259,6 +266,21 @@ class ToolServiceCompactHintTest {
     private static AiAgent hintAgent() {
         var agent = mock(AiAgent.class);
         when(agent.getName()).thenReturn("Peon-Dev");
+        // R-CC-18: the in-loop gate runs on the agent's OWN budget — without this stub the mock
+        // returns 0 (off) and the component could never fire the hint the tests assert
+        when(agent.compactAfterTokens()).thenReturn(160000);
+        return agent;
+    }
+
+    /**
+     * Agent stub for the diverging test: the gate budget (210000) is high enough that round 2's
+     * no-usage estimate (≈200k) lands in the HINT band (199500…210000) — not over budget, where
+     * R-CC-18.1 would fire a direct compact on the mock instead of the hint.
+     */
+    private static AiAgent divergingAgent() {
+        var agent = mock(AiAgent.class);
+        when(agent.getName()).thenReturn("Peon-Dev");
+        when(agent.compactAfterTokens()).thenReturn(210000);
         return agent;
     }
 

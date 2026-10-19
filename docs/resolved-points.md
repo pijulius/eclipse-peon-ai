@@ -1,6 +1,29 @@
+
+
 # Resolved Points
 
 Geklärte Punkte, die in kein Feature-Doc passen. Offene Punkte: [open-points.md](open-points.md).
+
+## SLF4J Multiple Providers — gelöst (Paul gemeldet 2026-10-17, Fix `8e6bcb54`)
+
+**Punkt:** `SLF4J(W): Class path contains multiple SLF4J providers` — `EclipseSlf4jProvider`
+gewinnt, aber slf4j-simple (2.0.19) ist als zweiter Provider resolved (direkte Plugin-pom-
+Dependency → `copy-dependencies` → `lib/` → Bundle-ClassPath → ServiceLoader sieht beide).
+**Entscheidung:** slf4j-simple komplett raus (pom + MANIFEST + build.properties + Disk) —
+nur noch unser Provider; Plugin-Suite 352/0 ohne Warnung, Fix-Nachweis strukturell (exakt eine
+Provider-Registrierung im gebauten Bundle). **Pauls Annahme korrigiert:** es gibt kein
+`Require-Bundle org.slf4j.api`-Range `[2.0.0,3.0.0[` (VOLL-Grep: 0 Treffer) — slf4j-api kommt
+aus dem gebündelten `lib/`-Jar, Range-Schärfung entfällt. Falls OSGi-Resolve von slf4j-api
+gewünscht: eigene Story (open-points.md ⏳).
+
+## Alias-Path — verworfen (Paul 2026-10-17)
+
+**Punkt:** LLM setzt immer wieder den Eclipse-Project-Path als Disk-Path — Bedarf für ein
+„alias path"-Feature (Tools akzeptieren beide Pfade)?
+**Entscheidung:** Verworfen. Pfad-Dialekte bleiben familien-spezifisch (`disk*` ↔ `eclipse*`,
+bewusste Trennung — Kollisionsargument `docs`/`tmp`-Projekte); nur ein Satz als Note in
+[shell-tool.md](shell-tool.md) Notes. Der Befund soll durch klare Pfad-Angaben in der
+Projekt-Info (und künftig R-CG-7) abgestellt werden.
 
 | Punkt | Entscheidung | Begründung | Datum |
 |---|---|---|---|
@@ -95,5 +118,5 @@ Mapping-Datei (feature-change-request-copilot.md) wurden aufgelöst. Verbleibend
 | R-SEL-4 Umsetzungsdetails | **🔒 alle drei bestätigt:** jede `setTextSelection` (auch leer) räumt den Typ; Rename `clazz`/`setClassFile` → `javaType`/`setJavaType`; Typ-Event berührt `currentProject` nicht | Kein Verhaltens-Widerspruch; UC-SEL-4-Tests bleiben | 2026-10-14 |
 | CIB-Doc-Split (`compact-input-budget.md`) | **🔒 Paul:** Split okay statt Umnummerierung | Löst die 6× `PRAEFIX_FREMD` im Compact-Doc; IDs + ~35 Code-Kommentar-Referenzen unangetastet | 2026-10-14 |
 | User-Smoke Issue #149 (Think) | **✅ 2026-09-30** (gemeinsamer Smoke aller Zyklen) | Ollama-Dropdown (""/true/false), Basis-Checkbox weg, `think:false` im Debug-Log, Custom-Agent Legacy-Frontmatter bestätigt | 2026-09-30 |
-| Unbegrenzte Query-Caches | **Belassen** — `SearchQuery.CACHE` + `RegexUtils.GLOB_CACHE` unbegrenzt; LRU 500 nur bei Bedarf | Einträge winzig; Rückversicherung 2026-10-14 abgeschlossen | 2026-10-14 |
+| Unbegrenzte Query-Caches | **Überholt 2026-10-17 (Paul specified):** [bounded-caches.md](bounded-caches.md) — `SearchQuery.CACHE` + `RegexUtils.GLOB_CACHE` auf geteilten `BoundedLruCache` (Cap 128), `WebFetchTool` echtes LRU | 2026-10-14 Rückversicherung „Einträge winzig" galt, bis der Cache-Audit (Nachtzyklus 5) LLM-kontrollierte Keys als echtes Leak einstufte | 2026-10-14 → 2026-10-17 |
 | Compressor-Dedup-Subtext-Edge / ThreadSafeMemory RAM-only | **Keine Aktion** — Dedup ist lossy (Compact akzeptiert), RAM-only nach Persist-IOException präexistierend | Keine Blocker; Revisit nur bei Beschwerden/Datenverlust-Meldungen | 2026-10-14 |

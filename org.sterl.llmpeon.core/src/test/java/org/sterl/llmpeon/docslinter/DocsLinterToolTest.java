@@ -61,6 +61,7 @@ class DocsLinterToolTest {
 
     // --- UC-DL-45: every finding is returned without truncation ---
     // UC-DL-45
+    // UC-DL-28
     @Test
     void returnsEveryFindingWithoutTruncation() throws IOException {
         writeDoc("a.md", """
@@ -170,6 +171,7 @@ class DocsLinterToolTest {
     }
 
     // --- UC-DL-29: full summary, no write ---
+    // UC-DL-29
     @Test
     void returnsCompleteSummary() throws IOException {
         writeDoc("a.md", """
@@ -191,6 +193,7 @@ class DocsLinterToolTest {
     }
 
     // --- UC-DL-31: findings never throw or modify sources ---
+    // UC-DL-31
     @Test
     void findingsNeverThrowOrModifySources() throws IOException {
         writeDoc("bad.md", """

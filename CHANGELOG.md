@@ -5,6 +5,56 @@ All notable changes to Peon AI are documented here. Format loosely follows
 
 Releases before `2.12.4` are documented via [GitHub Releases](https://github.com/sterlp/eclipse-peon-ai/releases).
 
+## [2.14.0] — 2026-10-19
+
+### Added
+
+- **Codegraph built-in.** When the active project has a `.codegraph` index, Peon connects the
+  local knowledge graph automatically — independent of the MCP toggle, isolated from your configured
+  MCP servers. All agents get `codegraph_explore` (one call instead of a search loop). The header
+  icon shows ON / OFF / ERROR, the name `codegraph` is reserved.
+- **Tagged tool results.** Tool results and harness information are rendered as clearly marked
+  blocks (`//-- Start/End …`), so the sender is visible in the text. The compact uses the same tags
+  as its only classification key — pure context blocks are dropped with a disclosure
+  (`context blocks dropped: K`) instead of eating the budget.
+- **`!` override for queued messages.** A message starting with `!` skips the input queue and goes
+  directly into the agent's memory while it is working (a `/command` in the rest is still resolved).
+  When the agent is idle, the text is sent exactly as typed.
+- **MCP tool results report their size**, like the built-in tools: `MCP <name> done. (N chars)`.
+- The web-fetch snapshot cache holds 16 pages (paging through large documents stays cheap).
+
+### Changed
+
+- **Compact decides after every tool round.** Above the agent budget it compacts directly (one
+  attempt per turn), in the 95 % band it hints — instead of waiting for an explicit compact event.
+- **Forward-looking context counter.** After a tool round the counter is the last provider input
+  **plus** an estimate of the messages appended since that request, shown with `~`. One counter for
+  header, hint and compact gate — so the compact decision sees the tool results that will be in the
+  next request instead of running a request that is too large.
+- **One trim component for shell and grep.** Shell output is capped by characters (`maxChars`,
+  default 10 000, no hidden hard cap) instead of a line count, and grep lines are capped at 500
+  chars — every cut is disclosed (`truncated: N chars total`, `showing N of M`).
+- **Codegraph: the index gates the start.** The `.codegraph` index is searched upwards to the Git
+  root (monorepos work). The binary is only a hint — if it is not found by path, plain `codegraph`
+  from your `PATH` is used (Windows: `cmd /c`). A start that fails is reported as an error with the
+  reason instead of staying silently off.
+- Token figures no longer use thousands separators (`154321`, not `154.321`).
+
+### Fixed
+
+- **Honest shell timeouts.** A timeout kills the whole process tree (children were reparented and
+  survived, holding the pipe open), names the time until the timeout actually fired instead of the
+  inflated cleanup time, and keeps the partial output — including a final line without a newline.
+- Codegraph did not start at all when the binary was not found by the probe, even though the index
+  existed.
+- Windows: off-by-one line break in the compact's thinking cap.
+- `eclipseGrepFiles` on a single file no longer discloses an extension filter that was not applied.
+- Only one SLF4J provider on the classpath.
+
+## [2.13.1] — 2026-10-17
+
+- Prompt fixes (Issue #159): PO delegation, developer, plan-write loop.
+
 ## [2.13.0] — 2026-10-16
 
 ### Added

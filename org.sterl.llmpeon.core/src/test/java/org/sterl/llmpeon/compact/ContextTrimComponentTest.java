@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.sterl.llmpeon.agent.model.TaggedResult;
 import org.sterl.llmpeon.model.CompactResult.Stage;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.tool.ToolService;
@@ -20,29 +21,13 @@ import dev.langchain4j.data.message.UserMessage;
 
 /**
  * Pure staging tests of the compact input (R-CIB-1…5, docs/compact.md §BDD) — no agent, no LLM.
- * Budgets are tokens (chars×2/7 estimator), fixture sizes are chosen so exactly one stage wins.
+ * Budgets are tokens (chars/3 estimator), fixture sizes are chosen so exactly one stage wins.
  */
 class ContextTrimComponentTest {
 
     private final ContextTrimComponent subject = new ContextTrimComponent();
 
 
-    // ---------- stage presets ----------
-
-    @Test
-    void stagePresetsOwnTheCapValues() {
-        // WHEN — the stage presets are read from the component
-        var stage1 = ContextTrimComponent.stage1Options();
-        var stage2 = ContextTrimComponent.stage2Options();
-
-        // THEN — stage 1: thinking front-capped at 9000, tools rendered uncapped
-        assertThat(stage1.thinkCapChars()).isEqualTo(9000);
-        assertThat(stage1.thinkKeepTail()).isTrue();
-        assertThat(stage1.toolMessageSize()).isEqualTo(Integer.MAX_VALUE);
-        // AND — stage 2: thinking and tools head-capped at 6000
-        assertThat(stage2.thinkCapChars()).isEqualTo(6000);
-        assertThat(stage2.toolMessageSize()).isEqualTo(6000);
-    }
     // ---------- budget off / under budget ----------
 
     @Test
@@ -97,14 +82,14 @@ class ContextTrimComponentTest {
         var messages = List.<ChatMessage>of(ai("result", thinking));
 
         // WHEN
-        var outcome = subject.stage(messages, 3000);
+        var outcome = subject.stage(messages, 3200);
 
         // THEN — thinking is front-capped at 9000: the anchor marks the dropped head, the end stays
         assertThat(outcome.stage()).isEqualTo(Stage.THINK_AND_USER);
-        assertThat(outcome.input()).contains("Think: " + ChatMessageUtil.THINK_FRONT_CAP_ANCHOR);
+        assertThat(outcome.input()).contains(ChatMessageUtil.THINK_PREFIX + ChatMessageUtil.THINK_FRONT_CAP_ANCHOR);
         assertThat(outcome.input()).contains("CONCLUSION");
         assertThat(outcome.input()).doesNotContain("H".repeat(20000));
-        assertThat(outcome.estimateAfter()).isLessThanOrEqualTo(3000);
+        assertThat(outcome.estimateAfter()).isLessThanOrEqualTo(3200);
     }
 
     @Test
@@ -135,7 +120,7 @@ class ContextTrimComponentTest {
         var messages = List.<ChatMessage>of(earlier, ai("ok", "T".repeat(15000)), user("current question"));
 
         // WHEN
-        var outcome = subject.stage(messages, 3000);
+        var outcome = subject.stage(messages, 3200);
 
         // THEN — only the state (context item) of the earlier message survives, its real text is dropped
         assertThat(outcome.stage()).isEqualTo(Stage.THINK_AND_USER);
@@ -152,7 +137,7 @@ class ContextTrimComponentTest {
                 user(ToolService.COMPACT_HINT + " (now)"));
 
         // WHEN
-        var outcome = subject.stage(messages, 3000);
+        var outcome = subject.stage(messages, 3500);
 
         // THEN — the hint is state (constant exclusion), the earlier real message is the full one
         assertThat(outcome.stage()).isEqualTo(Stage.THINK_AND_USER);
@@ -166,7 +151,7 @@ class ContextTrimComponentTest {
         var messages = List.<ChatMessage>of(ai("a1", "T".repeat(15000)), toolResult("read", "y".repeat(3000)));
 
         // WHEN
-        var outcome = subject.stage(messages, 4000);
+        var outcome = subject.stage(messages, 4200);
 
         // THEN — stage 1 runs without a user reduction target; AI text and (uncapped) tools stay full
         assertThat(outcome.stage()).isEqualTo(Stage.THINK_AND_USER);
@@ -202,7 +187,7 @@ class ContextTrimComponentTest {
     // ---------- final stage ----------
 
     @Test
-    void finalStage_capsEachMessageToRestTokensTimes7Over2OverN() {
+    void finalStage_capsEachMessageToRestTokensTimes3OverN() {
         // GIVEN — three messages, none of the earlier stages fits a 1000-token budget
         var messages = List.<ChatMessage>of(ai("a", "T".repeat(12000)), toolResult("write", "R".repeat(12000)),
                 user("q " + "U".repeat(3000)));
@@ -210,12 +195,12 @@ class ContextTrimComponentTest {
         // WHEN
         var outcome = subject.stage(messages, 1000);
 
-        // THEN — the per-message cap (restTokens×7/2/n) is applied to every finished render:
+        // THEN — the per-message cap (restTokens×3/n) is applied to every finished render:
         // no 2000-char run of any filler survives (stage 2 alone would leave 6000-char runs),
         // but the content heads are still there
         assertThat(outcome.stage()).isEqualTo(Stage.PER_MESSAGE);
         assertThat(outcome.input()).doesNotContain("T".repeat(2000)).doesNotContain("R".repeat(2000)).doesNotContain("U".repeat(2000));
-        assertThat(outcome.input()).contains("T".repeat(1000)).contains("TOOL_EXECUTION_RESULT:").contains("USER:\nq U");
+        assertThat(outcome.input()).contains("T".repeat(900)).contains("TOOL RESULT:").contains("USER:\nq U");
     }
 
     @Test
@@ -226,7 +211,7 @@ class ContextTrimComponentTest {
         var single = List.<ChatMessage>of(toolResult("big", "Z".repeat(50000)));
 
         // WHEN/THEN — for every budget the final estimate never exceeds it (R-CIB-4.4 termination
-        // guarantee; mutation ×7/2→×7 or ×2/7 must turn this red)
+        // guarantee; mutation of the ×3 inverse (e.g. back to ×7/2) must turn this red)
         for (var budget : List.of(100, 500, 1000, 4000)) {
             var outcome = subject.stage(multi, budget);
             assertThat(outcome.stage()).as("multi, budget %d".formatted(budget)).isEqualTo(Stage.PER_MESSAGE);
@@ -308,11 +293,11 @@ class ContextTrimComponentTest {
 
     @Test
     void disclosure_appendedOnceAtEnd_whenCapped() {
-        // GIVEN — stage 1 kicks in (15k thinking, budget 3000)
+        // GIVEN — stage 1 kicks in (15k thinking, budget 3200)
         var messages = List.<ChatMessage>of(ai("a", "T".repeat(15000)));
 
         // WHEN
-        var outcome = subject.stage(messages, 3000);
+        var outcome = subject.stage(messages, 3200);
 
         // THEN — "session truncated" + one caps line, exactly once, at the input end (R-CIB-5);
         // no per-message "(trimmed)" tags in compact mode
@@ -335,7 +320,7 @@ class ContextTrimComponentTest {
                 ai("a", "T".repeat(15000)));
 
         // WHEN
-        var outcome = subject.stage(messages, 3500);
+        var outcome = subject.stage(messages, 4000);
 
         // THEN — the reinsert marker message is state (constant exclusion), the later question is the
         // full last real user message
@@ -344,11 +329,109 @@ class ContextTrimComponentTest {
         assertThat(outcome.input()).doesNotContain("summary text here");
     }
 
+    // ---------- R-TR-9: pure context blocks drop before the compact input ----------
+
+    // R-TR-9
+    @Test
+    void pureContextBlockIsDroppedAndCounted() {
+        // GIVEN — a user message with a pure context block and the real text as separate TextContents
+        var nl = System.lineSeparator();
+        var block = TaggedResult.PREFIX + "context: x" + nl + "block-body" + nl + TaggedResult.SUFFIX + "context: x";
+        var messages = List.<ChatMessage>of(
+                UserMessage.from(List.of(TextContent.from(block), TextContent.from("fix it"))),
+                ai("ok"));
+
+        // WHEN
+        var outcome = subject.stage(messages, 100000);
+
+        // THEN — the block flew out before the compact input (count-only disclosure, R-TR-9):
+        // gone from the input, the real text stays full, K = 1 is named
+        assertThat(outcome.input()).doesNotContain(TaggedResult.PREFIX).doesNotContain("block-body");
+        assertThat(outcome.input()).contains("USER:" + nl + "fix it");
+        assertThat(outcome.contextBlocksDropped()).isEqualTo(1);
+        assertThat(outcome.input()).endsWith("session truncated" + nl + "context blocks dropped: 1");
+    }
+
+    // R-TR-9
+    @Test
+    void droppedBlocksDisclosedEvenBudgetOff() {
+        // GIVEN — the budget is off (≤ 0) and one pure context block
+        var nl = System.lineSeparator();
+        var block = TaggedResult.PREFIX + "context: y" + nl + "y-body" + nl + TaggedResult.SUFFIX + "context: y";
+        var messages = List.<ChatMessage>of(UserMessage.from(block), user("q"));
+
+        // WHEN
+        var outcome = subject.stage(messages, 0);
+
+        // THEN — the drop is a filter, not a cap (R-CIB-1 "never truncate" stays for capping):
+        // named even with the budget off
+        assertThat(outcome.stage()).isEqualTo(Stage.NONE);
+        assertThat(outcome.input()).contains("USER:" + nl + "q").doesNotContain("y-body");
+        assertThat(outcome.contextBlocksDropped()).isEqualTo(1);
+        assertThat(outcome.input()).contains("context blocks dropped: 1");
+    }
+
+    // R-TR-2
+    @Test
+    void embeddedBlockInToolResultIsNotDropped() {
+        // GIVEN — a tool result whose text is a sender line plus an embedded tagged block
+        var nl = System.lineSeparator();
+        var block = TaggedResult.PREFIX + "async" + nl + "async-body" + nl + TaggedResult.SUFFIX + "async";
+        var messages = List.<ChatMessage>of(toolResult("shell", "sender-line" + nl + block), user("q"));
+
+        // WHEN
+        var outcome = subject.stage(messages, 100000);
+
+        // THEN — the tool result is not a pure block (the first line decides, R-TR-2): it stays whole
+        assertThat(outcome.contextBlocksDropped()).isZero();
+        assertThat(outcome.input()).contains("TOOL RESULT:").contains("sender-line")
+                .contains(TaggedResult.SUFFIX + "async");
+    }
+
+    // R-TR-7
+    @Test
+    void classificationRunsOnTagPrefixes_notInstanceof() {
+        // GIVEN — a tool result beyond the stage-2 cap; the budget forces stage 2
+        var nl = System.lineSeparator();
+        var messages = List.<ChatMessage>of(toolResult("write", "R".repeat(9000)), user("q"));
+
+        // WHEN
+        var outcome = subject.stage(messages, 2500);
+
+        // THEN — the block is classified by its TOOL RESULT: prefix (no instanceof, R-TR-7):
+        // the header survives, the body after the "result:\n" marker is head-capped at 6000
+        assertThat(outcome.stage()).isEqualTo(Stage.TOOL_RESULTS);
+        assertThat(outcome.input()).contains("TOOL RESULT:" + nl + "tool name: write" + nl + "result:" + nl + "R".repeat(6000));
+        assertThat(outcome.input()).doesNotContain("R".repeat(6001));
+    }
+
+    // R-TR-9
+    @Test
+    void perMessageStage_sizesCapAgainstKLine_staysWithinBudget() {
+        // GIVEN — a pure context block and a 12k tool result; stage 1 (4k tokens) and stage 2
+        // (2k tokens) both exceed the 1500-token budget, so the per-message stage wins
+        var block = new TaggedResult("codegraph: peon-ai #a1b2", "cg-body").toString();
+        var messages = List.<ChatMessage>of(UserMessage.from(block), toolResult("codegraph", "R".repeat(12000)));
+
+        // WHEN
+        var outcome = subject.stage(messages, 1500);
+
+        // THEN — the block is gone from the input, K is disclosed on its own line, and the cap is
+        // sized against that line (R-CIB-4.4 fixed point): estimate never exceeds the budget
+        // (mutation: drop the K line from the perMessageCap disclosure → estimate 1509 > 1500)
+        assertThat(outcome.stage()).isEqualTo(Stage.PER_MESSAGE);
+        assertThat(outcome.contextBlocksDropped()).isEqualTo(1);
+        assertThat(outcome.input()).doesNotContain("cg-body").doesNotContain(TaggedResult.PREFIX);
+        assertThat(outcome.input()).endsWith("context blocks dropped: 1");
+        assertThat(outcome.estimateAfter()).isLessThanOrEqualTo(1500);
+    }
+
+
     // ---------- helpers ----------
 
-    /** System messages never enter the staging (filtered on list level, ADR-0030 landmine fix). */
+    /** System messages never enter the compact input (their SYSTEM: block is dropped silent, ADR-0030). */
     @Test
-    void systemMessagesAreFilteredOnListLevel() {
+    void systemMessagesNeverEnterTheStaging() {
         // GIVEN — a system message plus a user message
         var messages = List.<ChatMessage>of(SystemMessage.systemMessage("STATIC PROMPT"), user("q"));
 

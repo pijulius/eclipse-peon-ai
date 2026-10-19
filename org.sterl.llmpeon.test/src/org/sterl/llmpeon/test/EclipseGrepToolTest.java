@@ -149,6 +149,7 @@ public class EclipseGrepToolTest extends AbstractIntegrationTest {
         hitLines.forEach(l -> assertTrue("hit must contain the query:\n" + l, l.contains("einem text")));
     }
 
+    // BDD-6 (docs/output-trim-service.md): minified hit -> 500-char cap on the full rendered line
     @Test
     public void longLineIsClampedAndDisclosed() {
         // GIVEN one .md file with a single 20013-char line containing the query (minified)
@@ -157,13 +158,14 @@ public class EclipseGrepToolTest extends AbstractIntegrationTest {
         // WHEN grepping the query with the .md type filter
         String result = tool.eclipseGrepFiles("minifiedline", PeonTestFixture.PROJECT_NAME, ".md");
 
-        // THEN the hit line is clamped to exactly 2000 chars of text (13-char token + 1987 'a', nothing more)
+        // THEN the FULL rendered hit line (path + ":1: " + text) is capped at 500 chars + cut marker
         var hitLines = result.lines().filter(l -> l.contains("grepminified.md:1: ")).toList();
         assertEquals("exactly one hit line expected:\n" + result, 1, hitLines.size());
-        assertTrue("hit line must end with exactly the clamped 2000 chars:\n" + hitLines.get(0),
-                hitLines.get(0).matches(".*grepminified\\.md:1: minifiedline a{1987}$"));
+        String hit = hitLines.get(0);
+        assertTrue("cap marker must start at char 500 (line = 500 + marker):\n" + hit,
+                hit.substring(500).matches("…\\(\\+\\d+ chars\\)"));
         // ... and the clamp is honestly disclosed (family consistency with the disk tool)
-        assertContains(result, "1 line(s) truncated at 2000 chars");
+        assertContains(result, "1 line(s) truncated at 500 chars");
     }
 
     @Test
@@ -286,6 +288,50 @@ public class EclipseGrepToolTest extends AbstractIntegrationTest {
 
         assertContains(result, "no matches");
         assertContains(result, "File type filter: known text extensions and filenames only.");
+    }
+
+    // UC-OD-10
+    // R-OD-7 (docs/tool-output-disclosure.md): an explicit file target is never extension-filtered,
+    // so the disclosure must not claim a filter that did not happen (C-EXT, disk-side counterpart:
+    // DiskGrepToolTest.fileTargetBeatsExtensionFilter)
+    @Test
+    public void fileTargetBeatsExtensionFilterInDisclosure() {
+        var messages = new ArrayList<String>();
+        var capturingTool = new EclipseGrepTool() {
+            @Override
+            protected void onTool(String m) {
+                messages.add(m);
+            }
+        };
+
+        // GIVEN the fixture's GrepTarget.java — an explicit file target beats the extension filter
+        // WHEN grepped via the file path with an extension that would exclude it in a container walk
+        String result = capturingTool.eclipseGrepFiles("grepMe",
+                "/" + PeonTestFixture.PROJECT_NAME + "/src/org/sterl/fixture/GrepTarget.java", ".xml");
+
+        // THEN all matches of the file come through — no extension filter was applied ...
+        assertContains(result, "GrepTarget.java:4:     String first = \"grepMe\"");
+        assertContains(result, "GrepTarget.java:5:     String second = \"grepMe\"");
+        assertContains(result, "GrepTarget.java:6:     String third = \"grepMe\"");
+        // ... and the disclosure names NO extension — nothing was filtered (C-EXT)
+        assertContains(messages.get(0), "type '*'");
+        assertFalse("file target disclosure must not claim the .xml filter:\n" + messages.get(0),
+                messages.get(0).contains("type '.xml'"));
+
+        // AND no-match case with the extension: the standard no-extension filter hint is shown —
+        // the hint must not be suppressed by a filter that never happened on a file target (C-EXT)
+        String empty = capturingTool.eclipseGrepFiles("zzz-does-not-exist",
+                "/" + PeonTestFixture.PROJECT_NAME + "/src/org/sterl/fixture/GrepTarget.java", ".xml");
+        assertContains(empty, "no matches");
+        assertContains(empty, "File type filter: known text extensions and filenames only.");
+
+        // WHEN the same query targets the project (container walk) with the .java filter
+        messages.clear();
+        String scoped = capturingTool.eclipseGrepFiles("grepMe", PeonTestFixture.PROJECT_NAME, ".java");
+
+        // THEN the disclosure names the extension like today (unchanged)
+        assertContains(scoped, "GrepTarget.java");
+        assertContains(messages.get(0), "type '.java'");
     }
 
     private static int firstIndexContaining(List<String> lines, String value) {

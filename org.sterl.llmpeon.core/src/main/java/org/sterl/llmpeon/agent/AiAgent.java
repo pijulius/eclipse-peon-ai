@@ -36,7 +36,19 @@ public interface AiAgent {
     ThreadSafeMemory getMemory();
     
     int tokenContextUsedInPercent();
-    
+
+    /**
+     * The token budget at which this agent compacts — before a turn (R-CC-3) and directly inside
+     * the tool loop (R-CC-18): the shared {@code autoCompactAfter} budget scaled by this agent's
+     * {@code compactFactor} (1.0 = full budget; slaves compact earlier).
+     *
+     * @return the budget in tokens; {@code 0} = off (R-CIB-1). The default 0 keeps hand-written
+     *         fakes without a budget model out of the in-loop direct compact.
+     */
+    default int compactAfterTokens() {
+        return 0;
+    }
+
     /**
      * Clear the current state
      */
@@ -112,6 +124,14 @@ public interface AiAgent {
      */
     default boolean queueMessage(String msg) {
         return false;
+    }
+
+    /**
+     * Inject a user message directly into the agent's memory while it is working
+     * (queued-user-messages rule 8 override): the running turn sees it on its next model
+     * call. Bypasses the queue entirely — no queued entry, no follow-up turn. Default no-op.
+     */
+    default void injectUserMessage(String text) {
     }
 
     /** @return the number of queued messages waiting to be processed. Default 0 for agents without queues. */

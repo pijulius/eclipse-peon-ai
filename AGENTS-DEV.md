@@ -66,14 +66,22 @@ Hints for the dev phase, base rules `AGENTS.md`
   "constructor not applicable" errors (e.g. `SimpleContextItem` 2-arg from
   `@RequiredArgsConstructor`). Fix: `mvn -pl org.sterl.llmpeon.core clean compile` (or `clean test`)
   before the gate run.
+- **Headless Tycho ships stale `bin/` (hit 2026-10-19, R-CG-2 OSGi gate):** Tycho packages
+  from the PDE output folder `bin/` — `mvn clean` never touches it, and a disk-tool source
+  write without a following `eclipseRefreshProject` leaves class-mtime > source-mtime, so JDT
+  skips the recompile and the headless build silently ships an intermediate-state class
+  (verify with `javap` on the `bin/` class). Fix: delete `bin/` or refresh + rebuild first.
 - **Known-benign warnings — do NOT re-triage every cycle** (2026-09-10, warning-cleanup cycle:
-  64 → 12 problems, commits `51f43d2`/`a9124f1`/`56e9cc5`). The remaining 12 are accepted
+  64 → 12 problems, commits `51f43d2`/`a9124f1`/`56e9cc5`). The remaining 13 are accepted
   exceptions; fix real new ones, keep this list current:
-  - Plugin ×9 null-type-safety on method refs (`AIChatView:164-165`, `PeonAiService:401-402,489`,
-    `ModelComboWidget:128`, `EclipseUtil:318`, `EclipseWorkspaceReadFileTool:155`,
-    `StatusLineWidget:188`) — method refs to `@NonNull`-parameter functional interfaces; internal
-    callers never pass null. (2026-09-12: `AiAgentStatusModel:48` moved with the agent-status
-    module into core — now part of the core IDE-scope warnings above.)
+  - Plugin ×11 null-type-safety on method refs (`AIChatView:175-176`,
+    `PeonAiService:469-470,508,639`, `AiAdvancedPreferenceView:120`, `ModelComboWidget:128`,
+    `EclipseUtil:318`, `EclipseWorkspaceReadFileTool:158`, `StatusLineWidget:188`) — method refs
+    to `@NonNull`-parameter functional interfaces; internal callers never pass null.
+    (2026-09-12: `AiAgentStatusModel:48` moved with the agent-status module into core — now part
+    of the core IDE-scope warnings above. 2026-10-17 codegraph build: the list carried 9, the
+    build shows 11 — `PeonAiService clearAll: AiAgent::clear` and `AiAdvancedPreferenceView:120`
+    are pre-existing (verified at HEAD), just never listed. Line numbers drift with edits.)
   - Plugin ×1 `resources/` class-folder (`.classpath` mirrors `Bundle-ClassPath`) — **must stay**:
     `ChatMarkdownWidget` loads `chat.html` via classloader AND OSGi `FileLocator`; dropping the
     entry risks breaking the chat view at IDE runtime.
@@ -87,6 +95,13 @@ Hints for the dev phase, base rules `AGENTS.md`
   - `-Xlint`-diagnostic only (not in default build/IDE): this-escape ×10 (7 classes, none
     subclassed — intentional constructor-delegates-to-refresh pattern); opennlp-tools
     manifest `Class-Path` slf4j path quirk (upstream packaging).
+- **Docs-ID-Marker am Test: aus dem Feature-Doc kopieren, nie erfinden (hit 2026-10-17,
+  codegraph inc-19/20: Da-Dok REJECTED — 12 `// UC-CG-*`-Marker in Tests, ohne dass die UC-IDs
+  im Doc existieren; die Feature-Regeln heißen dort `R-CG-*`).** Regeln (`R-X-n`) tragen keine
+  `UC-X-n`-Überschriften — die Marker-Form muss zur Doc-Form passen (pure ID-Zeile, kein
+  Zusatztext). Sobald ein Plan ID-Marker vorsieht, gehört `lintDocsAndTests` in das
+  Inkrement-Gate: VERWAIST/UNBELEGT_ERLEDIGT blockiert, nicht erst der Review-Lauf.
+- Elegant, expressive modern Java (records, pattern matching, switch expressions, Lombok).
 - Elegant, expressive modern Java (records, pattern matching, switch expressions, Lombok).
 - On macOS, sum Surefire reports with Perl rather than GNU-only `awk match(..., array)`:
   `perl -ne 'if (/Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)/) {$t+=$1;$f+=$2;$e+=$3;$s+=$4} END {print "Tests=$t Failures=$f Errors=$e Skipped=$s\n"}' target/surefire-reports/*.txt`.

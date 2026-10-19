@@ -10,6 +10,7 @@ import org.eclipse.core.resources.IProject;
 import org.eclipse.core.runtime.ILog;
 import org.eclipse.core.runtime.Platform;
 import org.sterl.llmpeon.agent.AiAgent;
+import org.sterl.llmpeon.agent.model.TaggedResult;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.context.AgentsMdContextItem;
 import org.sterl.llmpeon.context.ContextItem;
@@ -17,6 +18,7 @@ import org.sterl.llmpeon.context.EclipseFileContextItem;
 import org.sterl.llmpeon.context.SimpleContextItem;
 import org.sterl.llmpeon.context.StaticContextItem;
 import org.sterl.llmpeon.context.UserContext;
+import org.sterl.llmpeon.parts.ai.CodegraphContextItem;
 import org.sterl.llmpeon.parts.shared.EclipseUtil;
 import org.sterl.llmpeon.parts.shared.IoUtils;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
@@ -44,6 +46,7 @@ public class AgentContextComponent {
     private final Supplier<AiAgent> activeAgent;
     private final Supplier<LlmConfig> config;
     private final Supplier<List<AiAgent>> agents;
+    private final CodegraphContextItem codegraph;
 
     /** Last saved plan file (workspace-relative reference, not disk — avoids stale project refs). */
     private IFile plan;
@@ -58,7 +61,8 @@ public class AgentContextComponent {
             ToolService sharedToolService,
             Supplier<AiAgent> activeAgent,
             Supplier<LlmConfig> config,
-            Supplier<List<AiAgent>> agents) {
+            Supplier<List<AiAgent>> agents,
+            CodegraphContextItem codegraph) {
         this.projectRef = projectRef;
         this.workspaceMemoryTool = workspaceMemoryTool;
         this.userContext = userContext;
@@ -67,6 +71,7 @@ public class AgentContextComponent {
         this.activeAgent = activeAgent;
         this.config = config;
         this.agents = agents;
+        this.codegraph = codegraph;
     }
 
     /**
@@ -139,6 +144,12 @@ public class AgentContextComponent {
             result.add(new EclipseFileContextItem("docs/index.md", projectRef));
         }
         result.addAll(userContext.get());
+
+        // R-CG-7 / R-CG-12: the codegraph context item — non-scaffold agents only (the scaffold
+        // has its own registry without MCP and never receives the item).
+        if (!(agent instanceof AiScaffoldAgent)) {
+            result.add(codegraph);
+        }
         return result;
     }
 
@@ -201,16 +212,18 @@ public class AgentContextComponent {
         result.add(new ContextItem() {
             @Override
             public String label() {
-                return "Plan reference " + dedupKey();
+                return "Plan reference " + JdtUtil.pathOf(planFile);
             }
             @Override
             public String dedupKey() {
-                return JdtUtil.pathOf(planFile);
+                if (!planFile.exists()) return null;
+                return TaggedResult.PREFIX + "context: plan " + JdtUtil.pathOf(planFile);
             }
             @Override
-            public String render() {
+            public TaggedResult render() {
                 if (!planFile.exists()) return null;
-                return "Existing plan found: " + JdtUtil.pathOf(planFile);
+                return new TaggedResult("context: plan " + JdtUtil.pathOf(planFile),
+                        "Existing plan found: " + JdtUtil.pathOf(planFile));
             };
         });
     }

@@ -92,9 +92,10 @@ class ThreadSafeMemoryTest extends AbstractMemoryFileTest {
                 .aiMessage(AiMessage.from("C"))
                 .tokenUsage(new TokenUsage(9000, 100, 9100))
                 .build());
-        // R-CC-1
-        // counter = provider INPUT tokens (context size), not total (cost)
-        assertThat(subject.getTotalTokenUsed()).isEqualTo(9000);
+        // R-CC-19
+        // counter = provider input + chars/3 estimate of the appended message (forward-looking)
+        assertThat(subject.getTotalTokenUsed())
+                .isEqualTo(9000 + ChatMessageUtil.estimateTokens(List.of(AiMessage.from("C"))));
 
         // WHEN
         subject.reevaluateTokens();
@@ -170,8 +171,8 @@ class ThreadSafeMemoryTest extends AbstractMemoryFileTest {
         // WHEN
         var subject = new ThreadSafeMemory(store);
 
-        // THEN — estimateTokens = chars×2/7 (≈25000×2/7 ≈ 7142 + Overhead → 7152)
-        assertThat(subject.getTotalTokenUsed()).isGreaterThan(0).isBetween(7100, 7200);
+        // THEN — estimateTokens = chars/3 (≈25000/3 ≈ 8333 + Overhead → 8343)
+        assertThat(subject.getTotalTokenUsed()).isGreaterThan(0).isBetween(8300, 8400);
     }
 
     private static class RecordingStore extends FileAgentHistoryStore {
