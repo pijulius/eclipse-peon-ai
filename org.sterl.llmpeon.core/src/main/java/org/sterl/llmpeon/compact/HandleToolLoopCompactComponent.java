@@ -13,7 +13,7 @@ import dev.langchain4j.data.message.UserMessage;
  * ADR-0070): one component, one decision — the hint-only event gate
  * ({@code ranTool(compactSession)} + {@code isCompactedThisTurn}) is gone.
  *
- * <p>Over the agent's own budget ({@code used > agent.compactAfterTokens()}) the conversation is
+ * <p>Over the raw config budget ({@code used > autoCompactAfter}) the conversation is
  * compacted DIRECTLY — no ask to the model, so a budget-exceeding context can no longer die at the
  * model limit. Inside the top 5 % band only the hint fires (R-CC-4 dedup, R-CC-15 fallback).
  * The consequence of a compact hangs on the one who runs it (ADR-0070): here the component, in
@@ -22,11 +22,39 @@ import dev.langchain4j.data.message.UserMessage;
  * <p><b>One instance per tool loop</b> ({@code ToolService.executeLoop}): the
  * {@code attemptedDirect} flag gives "one direct attempt per turn" (R-CC-18.1) without leaking
  * into sub-loops or the next turn.</p>
+ *
+ * <p><b>Two rules, two time points</b>: the in-loop direct compact applies
+ * {@link #overRawBudget(int, int, int)} (over the raw config budget, R-CC-18.1), the pre-turn check
+ * at the start of {@code AbstractAgent.doCall} applies {@link #overHintBand(int, int, int)} (over the
+ * 95 % band, R-CC-20.2) — each caller uses its own rule, they never share a threshold.</p>
  */
 public class HandleToolLoopCompactComponent {
 
     /** One direct attempt per turn (R-CC-18.1): a SKIPPED_SMALL/FAILED_EMPTY is not retried in-loop. */
     private boolean attemptedDirect = false;
+
+    /**
+     * The in-loop over-budget rule (R-CC-18.1): over the RAW config budget with a compactable
+     * history (R-CC-8) and the switch on (R-CIB-1: 0 = off). The caller runs the consequences
+     * (ADR-0070). The pre-turn check uses {@link #overHintBand(int, int, int)} (R-CC-20.2).
+     */
+    public static boolean overRawBudget(int used, int budget, int messageCount) {
+        return budget > 0 // R-CIB-1: 0 = off
+                && used > budget // raw config — the PO slave factor applies only before a new task
+                && messageCount > CompactConstants.MIN_COMPACT_MESSAGES; // R-CC-8
+    }
+
+    /**
+     * R-CC-20.2: the 95 % band of the raw budget — the same percentage the in-loop hint uses
+     * (R-CC-18.2), strict: exactly 95 % does not fire. Integer math on purpose:
+     * {@code budget * 95L / 100} is the exact floor of 95 % with no floating-point rounding,
+     * so the threshold is deterministic for every budget.
+     */
+    public static boolean overHintBand(int used, int budget, int messageCount) {
+        return budget > 0 // R-CIB-1: 0 = off
+                && used > budget * 95L / 100 // strict >, exact — not the double band below
+                && messageCount > CompactConstants.MIN_COMPACT_MESSAGES; // R-CC-8
+    }
 
     /**
      * The state-based decision, run after every tool round's {@code addResult}, before the next
@@ -38,15 +66,12 @@ public class HandleToolLoopCompactComponent {
     public void handle(ToolLoopRequest req, boolean hasCompactTool) {
         var memory = req.getMemory();
         var agent = req.getAgent();
-        var budget = agent != null
-                ? agent.compactAfterTokens() // agent-own (ADR-0070): slaves compact earlier
-                : req.getConfig().getAutoCompactAfter(); // sub-loop without owning agent (R-CC-15)
+        var budget = req.getConfig().getAutoCompactAfter(); // raw config — the PO slave factor applies only before a new task
         if (budget <= 0) return; // R-CIB-1: 0 = off
 
         var used = memory.getTotalTokenUsed();
-        if (used > budget) { // R-CC-18.1 — over budget: compact directly, no hint
-            if (agent != null && memory.size() > CompactConstants.MIN_COMPACT_MESSAGES // R-CC-8
-                    && !attemptedDirect) {
+        if (overRawBudget(used, budget, memory.size())) { // R-CC-18.1 — over budget: compact directly, no hint
+            if (agent != null && !attemptedDirect) {
                 attemptedDirect = true;
                 var result = agent.compact(req.getMonitor()); // AbstractAgent.compact null-safes the monitor itself
                 if (result.status() == CompactResult.Status.COMPACTED) {
@@ -57,7 +82,7 @@ public class HandleToolLoopCompactComponent {
                             + memory.tokenDiagnosis()); // reason + numbers, R-CC-10
                 }
                 // SKIPPED_SMALL / FAILED_EMPTY: no retry (flag), no hint (over budget) — R-CC-18.1
-            } else if (agent == null && memory.size() > CompactConstants.MIN_COMPACT_MESSAGES) {
+            } else if (agent == null) { // R-CC-8 already checked in overRawBudget
                 fallbackHint(req); // R-CC-15: no owning agent to compact — honest out
             }
             return;
@@ -79,15 +104,14 @@ public class HandleToolLoopCompactComponent {
         if (agent == null || !hasCompactTool) {
             fallbackHint(req); // R-CC-15
         } else {
-            compactHint(req, agent, agent.compactAfterTokens()); // the gate budget, same source as handle
+            compactHint(req, agent, req.getConfig().getAutoCompactAfter()); // the gate budget, same source as handle
         }
     }
 
     /**
      * The compact hint (R-CC-4): one per memory — a cleared memory (successful compact) re-arms
-     * it. The text shows the BUDGET the gate compared against ({@code budget}), not the config
-     * value: since R-CC-18 the two diverge for slaves (compactFactor), and the hint must never
-     * lie about the limit.
+     * it. The text shows the BUDGET the gate compared against ({@code budget} — the raw config
+     * value): the hint must never lie about the limit.
      */
     private void compactHint(ToolLoopRequest req, AiAgent agent, int budget) {
         var memory = req.getMemory();

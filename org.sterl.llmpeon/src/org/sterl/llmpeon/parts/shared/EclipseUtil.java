@@ -1,7 +1,9 @@
 package org.sterl.llmpeon.parts.shared;
 
+import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -355,7 +357,99 @@ public class EclipseUtil {
         m = findMember(p, "package.json");
         if (m.isPresent()) result.append(System.lineSeparator()).append(JdtUtil.pathOf(m.get()));
 
+        appendNestingLines(result, p);
+
         return result.toString();
+    }
+
+    /**
+     * R-WN-3 (docs/workspace-nesting.md): the nesting context of a project — at most one
+     * extra projectInfo line per direction, only for real nesting of open projects,
+     * compared via the canonical project folders (projectFolder). Appends nothing when
+     * the project is not nested.
+     */
+    private static void appendNestingLines(StringBuilder sb, IProject p) {
+        var own = projectFolder(p);
+        if (own == null) return;
+
+        record Ancestor(IProject project, Path folder) {
+        }
+        Ancestor nestedIn = null;
+        var contained = new ArrayList<String>();
+        for (var other : openProjects()) {
+            if (other.getName().equals(p.getName())) continue;
+            var folder = projectFolder(other);
+            if (folder == null) continue;
+            if (own.startsWith(folder) && !own.equals(folder)) {
+                // a strict ancestor of p — all such folders form a chain, keep the deepest
+                if (nestedIn == null || folder.startsWith(nestedIn.folder())) nestedIn = new Ancestor(other, folder);
+            } else if (folder.startsWith(own) && !folder.equals(own)) {
+                // strictly contained in p, any depth
+                contained.add(other.getName());
+            }
+        }
+        if (nestedIn != null) {
+            var subPath = nestedIn.folder().relativize(own).toString().replace(File.separatorChar, '/');
+            sb.append(System.lineSeparator())
+                .append("Nested in Eclipse project /").append(nestedIn.project().getName())
+                .append(" — the same files are also visible under /").append(nestedIn.project().getName())
+                .append('/').append(subPath).append("/…; tools return the most specific project path.");
+        }
+        if (!contained.isEmpty()) {
+            Collections.sort(contained);
+            sb.append(System.lineSeparator())
+                .append("Contains Eclipse projects: ").append(String.join(", ", contained))
+                .append(" — their files are also visible under this path; tools return the most specific project path.");
+        }
+    }
+
+    /**
+     * R-WN-1 (docs/workspace-nesting.md): the workspace path of a file visible under several
+     * projects, plus the project that owns that view.
+     */
+    public record ProjectPathEntry(String path, IProject project) {
+    }
+
+    /**
+     * R-WN-1 (docs/workspace-nesting.md): the deduplication identity of a file visible under
+     * several projects — the textual Disk path; falls back to the workspace path when the
+     * resource has no known filesystem location. (Symlinks are out of scope.)
+     */
+    public static String diskDedupKey(IResource file) {
+        var diskPath = JdtUtil.diskPathOf(file);
+        return diskPath == null ? JdtUtil.pathOf(file) : diskPath;
+    }
+
+    /**
+     * D4 (docs/workspace-nesting.md): the canonical absolute, normalized project folder —
+     * no symlink resolution. {@code null} when the project has no known location.
+     */
+    @Nullable
+    public static Path projectFolder(IProject project) {
+        var diskPath = JdtUtil.diskPathOf(project);
+        if (diskPath == null) return null;
+        return Path.of(diskPath).toAbsolutePath().normalize();
+    }
+
+    /**
+     * R-WN-1 (docs/workspace-nesting.md): the entry representing a file visible under
+     * several projects. The project with the deepest canonical folder — a strict descendant
+     * of the other one — wins; equal depth or no nesting keeps the existing (first found)
+     * entry. A {@code null} existing entry takes the candidate.
+     *
+     * <p>Cap edge (plan D3): callers stop scanning at a full cap, so an already delivered
+     * entry is not replaced by a deeper view found later — a capped result may carry a
+     * shallower path, but the file still counts once.
+     */
+    public static ProjectPathEntry mostSpecificEntry(ProjectPathEntry existing, ProjectPathEntry candidate) {
+        if (existing == null) return candidate;
+        var existingFolder = projectFolder(existing.project());
+        var candidateFolder = projectFolder(candidate.project());
+        if (existingFolder == null || candidateFolder == null) return existing;
+        if (candidateFolder.startsWith(existingFolder) && !candidateFolder.equals(existingFolder)) {
+            return candidate;
+        }
+        return existing;
     }
 
     /**

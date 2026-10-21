@@ -1,16 +1,17 @@
-## ⏳ Nachtzyklus 5 (2026-10-16) — Token-Schätzung chars×2/7 → chars/3
-- **Punkt:** Estimator `ChatMessageUtil.charsToTokens` (chars×2/7 ≈ /3.5) unterschätzt systematisch
-  (~110k statt ~120k gemessen). Paul-Idee: /3. Jon: **umgesetzt** — R1 in token-usage.md sagt
-  ohnehin schon „chars / 3", der Code war die Abweichung; zu niedrige Schätzung ist für die
-  Kontext-Anzeige (Compact-Button used/max) die gefährliche Richtung (Overflow-Risiko), zu hoch nur kosmetisch.
-- **Rückversicherung:** Paul hat /3 vorgeschlagen („nicht so wichtig, mehr Info") — Umsetzung im
-  Nachtzyklus autonom; widerspricht Paul, zurück auf ×2/7 (Änderung ist eine Konstante). **Umgesetzt
-  `fbe2866f` + Zentralisierung `tokensToChars` `3199f732` (Open-Q1).**
 # Open Points
 
 Status je Punkt: ❓ offen · ⏳ selbst entschieden (Rückversicherung mit User steht aus) · 🔒 geklärt.
 Geklärte Punkte ohne eigenes Feature-Doc: [resolved-points.md](resolved-points.md).
 Aufgeräumt 2026-10-14 (Paul-Order): Gelöste → resolved-points.md, Wertloses gelöscht, Rest komprimiert.
+## Release-Doku-Auflösung (2026-10-20) — github-eclipse-repo.md aufgelöst (ADR-0072)
+
+- ❓ **JAR-Signing:** Update-Site-Plugins sind unsigniert — Eclipse warnt beim Install. Sign-Zertifikat besorgen und release.yml erweitern? Aufwand vs. Nutzen klären.
+- ❓ **Auto-Create GitHub Releases:** `release.yml` deployt nur die Pages-Site, erzeugt aber kein GitHub Release (Changelog/Asset). Soll ein Release-Step (Tag → Release, Binary-Attach) dazu?
+- ⏳ **p2-Pfad-Verifikation:** **Update-Site bestätigt (Paul 2026-10-21): `https://sterlp.github.io/eclipse-peon-ai/`** — `p2.index` dort 200 (2026-10-19 gemessen); `https://peon-ai-4e.sterl.org/p2.index` → 404 (Root = VitePress-Homepage). Homepage-Installation + Skill `peon-release` sind darauf umgestellt. **Rückversicherung:** nach dem nächsten Release messen, wohin `deploy-pages` die Update-Site tatsächlich legt (sterl.org oder github.io), und SKILL + Homepage-Installation abgleichen.
+- ⏳ **Compact-Briefing-Schema (compressor.md):** 3 Ergänzungen vorgeschlagen — STANDING-RULES-Slot
+  (Pauls dauerhafte Verhaltensregeln als eigener Block), preserve-Pfade erweitern, memory.md =
+  complement-not-replace (Briefing ergänzt memory.md, ersetzt es nicht). Freigabe Paul steht aus.
+
 
 ## 2.14.0 (2026-10-19) — Jon-Entscheidungen zur Rückversicherung
 
@@ -27,7 +28,27 @@ Aufgeräumt 2026-10-14 (Paul-Order): Gelöste → resolved-points.md, Wertloses 
 
 ## 2.14.1 (2026-10-19) — externes Review TOP 1–3: Jon-Entscheidungen
 
+- ⏳ **Delegations-Compact feuert pro Delegation, nicht pro Turn** ([ADR-0071](adr/0071-compact-policy-owned-by-delegation.md)):
+  Jeder Jon-Call an einen Sklaven (`askDev`, `buildWithDev`, …) compactet ihn, sobald er über 70 % liegt —
+  auch mitten in einer laufenden Story. Das ist Pauls SOLL („vor jeder neuen Aufgabe"), die **Kosten**-Folge
+  ist neu: mehrere Delegationen hintereinander können mehrere Compressor-Calls auslösen. Falls das zu
+  teuer ist: Faktor anheben (eine Konstante in `PoDelegateTool`) oder nur bei einem Themenwechsel
+  compacten. Rückversicherung Paul.
+- ❓ **Test-Fixture-Duplikat (Da-Dok CONCERNS 2, 2026-10-20):** StreamMock/monitor/ProbeTool-Fixture
+  in ≥3 core-Testklassen nur namentlich dupliziert (`AbstractAgentPreTurnCompactTest`,
+  `AbstractAgentCompactResultTest`, `AiDeveloperAgentTest`). Bagatelle — eigener Micro-Zyklus
+  (gemeinsame Test-Fixture im core) oder weiterleben? Jon-Empfehlung: erst wenn die vierte Kopie
+  entsteht.
+
 - ⏳ **R-CG-15 neu (Projektwechsel im Monorepo):** Befund **bestätigt** — `CodegraphConnectionService:106`
+- 🔒 **Jon ohne Hint-Band vor dem Pre-Turn-Compact (Paul 2026-10-20):** kein Hint-Band am Turn-Anfang,
+  für niemanden — der Compact läuft vor der frischen Message (R-CC-20.1), der Compressor preserved die
+  History als Summary, Kuratierung läuft über persistiertes `memoryAdd`. Entscheidung in
+  compact.md R-CC-20.2 festgehalten.
+- ❓ **In-Loop-Direkt-Compact fängt Exceptions nicht (Nachbarloch von R-CC-20.5):** wirft der Compressor
+  im Tool-Loop (`HandleToolLoopCompactComponent.handle` → `agent.compact()`), stirbt der ganze Turn —
+  seit R-CC-18. Nichts geht verloren (Messages sind im Memory), aber der gleiche Fehler, der R-CC-20.5
+  heilt, gehört auch hier hin. Scope bewusst nicht im R-CC-20.5-Fix erweitert.
   kehrt bei gleichem `workDir` zurück, `State.project` bleibt A, `CodegraphContextItem` mappt weiter A.
   SOLL geschrieben: Verbindung bleibt, State-Refresh auf B. Nebenwirkung, die Paul kennen sollte:
   jeder Projektwechsel mit gemeinsamem Index erzeugt **eine neue Chat-Zeile** (Dedup-Key ändert sich);
@@ -39,6 +60,20 @@ Aufgeräumt 2026-10-14 (Paul-Order): Gelöste → resolved-points.md, Wertloses 
   (der `finally` in `McpConnectionService.connectServers` würde sonst einen Toggle-OFF überschreiben).
 - ✅ **TOP 3 (Compact `result:`-Marker):** kein neuer Befund — identisch mit R-CIB-4 Stufe 2
   (❌ specified 2026-10-19: `lastOccurrence` raus, das erste Vorkommen ist immer strukturell).
+
+## 2.14.1 (2026-10-19) — Workspace-Nesting: Jon-Entscheidungen zur Rückversicherung
+
+- ⏳ **Ergebnis-Limit schlägt Tiefe (R-WN-1):** Ist das Limit erreicht, wird ein schon gelieferter
+  Duplikat-Eintrag nicht mehr auf die tiefere Sicht umgeschrieben (kein Volldurchlauf nach dem Cap);
+  die Datei zählt weiterhin einmal, das Limit ist benannt. **Von Jon entschieden** (Performance gegen
+  ein Rand-Kosmetikum: der Pfad zeigt dann den Parent, die Datei ist trotzdem nur einmal da).
+  Alternative wäre ein Volldurchlauf nach dem Cap — bei jedem großen Monorepo-Search teuer.
+- ⏳ **„Gleich tiefe Projekte → zuerst gefundener Pfad bleibt" bleibt ungetestet (Da-Dok F1):**
+  der Fall ist nur bei **demselben** Ordner zweier Projekte beobachtbar, und Eclipse lehnt ein zweites
+  Projekt am selben Ordner normalerweise ab (gleicher Disk-Pfad = gleiche Datei; anderer Disk-Pfad =
+  andere Datei, kein Dedup-Fall). Die `!equals`-Zusicherung bleibt als Defensive stehen — sie ist im
+  Test-Workspace nicht rot zu bekommen. **Rückversicherung:** Paul akzeptiert das, oder wir bauen den
+  Guard ab (dann müsste irgendwo belegt sein, dass Eclipse gleiche Projekt-Ordner ausschließt).
 
 ## ❓ Doc-Aufräum-Slice: Belege, Messungen, Vorfälle raus aus den Feature-Docs (Paul 2026-10-19)
 
@@ -346,3 +381,14 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
 - 🔒 **Icon (2026-10-18 erledigt):** 32 ohne `viewBox` → auf 24×24 + `viewBox="0 0 32 32"`
   normalisiert; `codegraph_off.svg`/`codegraph_off_dark.svg` ergänzt (gedimmte Farbe statt
   `setEnabled(false)` — SWT graut Text, nicht das Image); R-CG-8 präzisiert.
+
+
+
+## ⏳ Nachtzyklus 5 (2026-10-16) — Token-Schätzung chars×2/7 → chars/3
+- **Punkt:** Estimator `ChatMessageUtil.charsToTokens` (chars×2/7 ≈ /3.5) unterschätzt systematisch
+  (~110k statt ~120k gemessen). Paul-Idee: /3. Jon: **umgesetzt** — R1 in token-usage.md sagt
+  ohnehin schon „chars / 3", der Code war die Abweichung; zu niedrige Schätzung ist für die
+  Kontext-Anzeige (Compact-Button used/max) die gefährliche Richtung (Overflow-Risiko), zu hoch nur kosmetisch.
+- **Rückversicherung:** Paul hat /3 vorgeschlagen („nicht so wichtig, mehr Info") — Umsetzung im
+  Nachtzyklus autonom; widerspricht Paul, zurück auf ×2/7 (Änderung ist eine Konstante). **Umgesetzt
+  `fbe2866f` + Zentralisierung `tokensToChars` `3199f732` (Open-Q1).**

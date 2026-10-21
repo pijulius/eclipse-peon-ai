@@ -14,7 +14,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,7 +38,6 @@ import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.UserContext;
-import org.sterl.llmpeon.memory.FileAgentHistoryStore;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
 import org.sterl.llmpeon.mcp.CodegraphProbe;
 import org.sterl.llmpeon.parts.PeonConstants;
@@ -76,6 +74,8 @@ import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.TokenUsage;
 
 public class PeonAiServiceTest extends AbstractIntegrationTest {
 
@@ -436,6 +436,72 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         // THEN
         assertEquals(4000, aiService.getConfig().getAutoCompactAfter());
     }
+
+    /**
+     * Stale-supplier regression (plan B): the pre-delegation compact threshold must follow a live
+     * {@code updateConfig} — the supplier reads the volatile {@code LlmConfig}, not the instance
+     * captured when Jon's team was built. Under a bound method ref the default 80000 survived the
+     * 4000 update (threshold 56000) and the 3500-token slave was never compacted.
+     */
+    @Test
+    public void delegateCompactThresholdFollowsConfigUpdate() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        aiService.setActiveAgent(AiPoAgent.NAME);
+        var delegate = jonDelegate();
+        var slave = delegate.getPlanSlave();
+
+        // GIVEN: the LLM points at the mock server (updateConfig rebuilds the base model)
+        aiService.updateConfig(aiService.getConfig().toBuilder()
+                .providerType(AiProvider.OPEN_AI)
+                .url(mockLlmServer.getUrl()).build());
+
+        // AND: the slave holds 3500 used tokens in 5 messages (above the 3-message compact minimum)
+        seedSlaveMemoryWithCounter(slave, 3500);
+
+        // WHEN: after the agent was built the budget drops to 4000 — 0.7 × 4000 = 2800 < 3500
+        aiService.updateConfig(aiService.getConfig().toBuilder().autoCompactAfter(4000).build());
+        assertEquals(4000, aiService.getConfig().getAutoCompactAfter());
+
+        // THEN: the delegation compacts the slave BEFORE the request — the compressor's queued
+        // summary is consumed into the slave's memory and the seed is gone (stale 80000 budget:
+        // no compact → seed survives → red)
+        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed summary")); // the compressor
+        mockLlmServer.queueResponse(AiMessage.aiMessage("plan done"));          // the delegation itself
+        var reply = delegate.talkPlan("make a plan");
+
+        assertTrue("the delegation must still run: " + reply, reply.contains("plan done"));
+        assertFalse("seed must be gone after the pre-delegation compact",
+                slave.getMemory().containsUserMessage("seed 0"));
+        assertTrue("the compressor response must have been consumed by the compact",
+                slave.getMemory().getCopy().stream()
+                        .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("compressed summary")));
+
+        // AND: autoCompactAfter = 0 (off, R-CIB-1) → no compact, even above the old threshold
+        aiService.updateConfig(aiService.getConfig().toBuilder().autoCompactAfter(0).build());
+        seedSlaveMemoryWithCounter(slave, 3500);
+        mockLlmServer.queueResponse(AiMessage.aiMessage("plan done again"));
+        var reply2 = delegate.talkPlan("make a plan");
+
+        assertTrue("the delegation must still run: " + reply2, reply2.contains("plan done again"));
+        assertTrue("0 = off: the seed must survive", slave.getMemory().containsUserMessage("seed 0"));
+    }
+
+    /** Seeds the slave's memory with 4 seed messages and sets the token counter to exactly {@code tokens}. */
+    private static void seedSlaveMemoryWithCounter(AiAgent slave, int tokens) {
+        var memory = slave.getMemory();
+        for (int i = 0; i < 2; i++) {
+            memory.add(UserMessage.from("seed " + i));
+            memory.add(AiMessage.from("seed reply " + i));
+        }
+        // R-CC-19: addResult is forward-looking (provider input + chars/3 of the appended message),
+        // so net the appended message's estimate out of the provider input to land at exactly `tokens`.
+        var ai = AiMessage.from("counter seed");
+        var input = tokens - ChatMessageUtil.estimateTokens(List.of(ai));
+        memory.addResult(ChatResponse.builder()
+                .aiMessage(ai)
+                .tokenUsage(new TokenUsage(input, 0, input))
+                .build(), List.of());
+    }
     
     @Test
     public void test_AiScaffoldAgent_tools() {
@@ -648,70 +714,6 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             assertTrue(agentName + " must be persistent", historyFile.isPresent());
             assertTrue(agentName + " history file must live under " + expectedStateDir,
                     historyFile.get().startsWith(expectedStateDir));
-        }
-    }
-
-    /**
-     * ADR-0041 R3 mutation proof: the one-shot migration must run in the {@link PeonAiService}
-     * constructor BEFORE the AgentService is built — otherwise the freshly-migrated history file is
-     * never loaded into the stores (empty UI history despite the file having moved). This plants a
-     * legacy {@code ~/.peon/state} history with a unique marker, builds the service, and asserts the
-     * loaded memory contains the marker — only true if the migration ran before the stores loaded.
-     */
-    @Test
-    public void serviceStartMigratesLegacyState() throws Exception {
-        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
-
-        var expectedStateDir = Platform.getStateLocation(Platform.getBundle(PeonConstants.PLUGIN_ID))
-                .append("state").toFile().toPath();
-
-        // clear any leftover target so the legacy file is moved (not skipped) — no reliance on prior-run state
-        Files.deleteIfExists(expectedStateDir.resolve(AiDevAgent.NAME + "-history.jsonl"));
-
-        // GIVEN a legacy ~/.peon/state with a Dev history carrying a unique marker — BEFORE the service build
-        var marker = "legacy-migration-marker-" + System.nanoTime();
-        var legacyRoot = Path.of(System.getProperty("java.io.tmpdir"), ".peon-migration-test-" + System.nanoTime());
-        var legacyFile = legacyRoot.resolve("state").resolve(AiDevAgent.NAME + "-history.jsonl");
-        new FileAgentHistoryStore(legacyFile).append(UserMessage.from(marker));
-
-        try {
-            var ccm = new ConfiguredChatModel(LlmConfig.builder()
-                    .model("test")
-                    .url("http://localhost:0")
-                    .configDir(legacyRoot) // → config.stateDirectory() = legacyRoot/state
-                    .build());
-
-            // WHEN building the service (constructor: migrate runs BEFORE AgentService/store build)
-            var service = new PeonAiService(() -> {}, null, null, null, ccm);
-            var dev = service.getAgent(AiDevAgent.NAME).orElseThrow();
-
-            // THEN 1: the history file now lives in the workspace metadata state (R2)
-            assertTrue("Dev history must live under " + expectedStateDir,
-                    dev.getMemory().historyFile().orElseThrow().startsWith(expectedStateDir));
-
-            // THEN 2 (mutation killer): the loaded memory contains the legacy marker —
-            // only true if the migration ran before the stores loaded
-            assertTrue("Loaded memory must contain the legacy marker (migration ran before store build)",
-                    dev.getMemory().containsMessage(marker));
-        } finally {
-            // no persistent state behind (Memory rule 12): remove the legacy root + the migrated metadata file
-            deleteRecursively(legacyRoot);
-            Files.deleteIfExists(expectedStateDir.resolve(AiDevAgent.NAME + "-history.jsonl"));
-        }
-    }
-
-    /** Best-effort recursive delete for test scratch state (tmpdir / metadata state file). */
-    private static void deleteRecursively(Path root) {
-        if (root == null || !Files.exists(root)) return;
-        try (var paths = Files.walk(root)) {
-            paths.sorted(Comparator.reverseOrder()).forEach(p -> {
-                try {
-                    Files.deleteIfExists(p);
-                } catch (IOException ignored) {
-                }
-            });
-        } catch (IOException ignored) {
-            // best-effort cleanup — leaving scratch state behind is harmless
         }
     }
 

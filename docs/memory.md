@@ -2,148 +2,51 @@
 
 > docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts im Chat.
 
-## Stand 2026-10-19 (2) — 2.14.0 release-fertig (Branch `story/night-5-2026-10-16`, gepusht `7e1f52ef`)
+## Stand 2026-10-21 — final (Branch `story/workspace-nesting-2026-10-19`)
 
-- **2.14.0 = der ganze Nachtzyklus** (78 Commits seit 2.13.0): CHANGELOG-Eintrag vollständig
-  geschrieben (inkl. 2.13.1-Nachtrag #159). `origin/main` (2.13.1) ist gemergt, Branch gepusht.
-  **Merge nach main + Tag `2.14.0` = Paul** (er released immer selbst; release.yml setzt die Version
-  aus dem Tag, kein pom-Bump).
-- **Gates:** Core **1223/0/0/0**, OSGi **387 run / 0 F / 0 E / 49 skipped**, Tycho/Feature/
-  Update-Site SUCCESS.
-- **In diesem Zyklus gebaut/gefixt:** Shell-Timeout R4 (`a68b5ce2`: Tree-Kill, eingefrorene Dauer,
-  Partial Output), R-CC-19 forward-looking counter (`3b69a76e`), Codegraph R-CG-1/2
-  (`7e5c34b5`: Index = Eintritt, Binary = Hinweis, ERROR statt still OFF), Icon Graph-Glyphe
-  (`6686fc43`), PO-Prompt-Klärung (`7e1f52ef`: fachliches IST bleibt = Statusmarker, ADR nur bei
-  Abweichung von Jons Empfehlung).
-- **⏳ Rückversicherungen (open-points):** R-CC-19-Semantik + Tilde, Icon-Motiv, Windows-`cmd /c`-Fallback.
-- **❓ Doc-Aufräum-Slice (open-points):** Belege/Messungen/Vorfälle raus aus Feature-Docs nach
-  `peon-plan/` — Regel im PO-Prompt bleibt, Bestand ist nicht-konform (Grep-Inventar nötig).
-- **2.14.1-Backlog:** R-CG-14 (Dispose gewinnt, beide Connection-Services — Fix = Generation +
-  `disposed`, nicht Lock über den Connect) · **R-CG-15** (Monorepo-Projektwechsel: gleicher `workDir`
-  → State-Refresh aufs aktive Projekt, kein Reconnect) · R-CIB-4 Stufe 2 (erstes
-  `result:` statt letztem), R-CG-13 (Codegraph-Item nur bei sichtbarem `codegraph_explore`),
-  R-TR-6 INFO-Text + echte Assertions in `TaggedResultTest`, Reprobe-Entscheidung.
-- **Trap 2026-10-19:** `new Status(severity, pluginId, message, throwable)` setzt in
-  equinox.common 3.21 `getCode()` **immer** auf OK → `getSeverity()` lesen, nie `getCode()`.
-  Dazu in `AGENTS-DEV.md`: headless Tycho verpackt stale `bin/` (mtime gewinnt über die Quelle).
-
-### Frühere Stände — Nachtzyklus 5, Detailhistorie (2026-10-16 … 2026-10-19)
-
-#### Stand 2026-10-19 (03:46) — R-CC-18, Docs-Sweep, Branch gepusht
-
-- ✅ **R-CC-18 — Direct Compact in der Tool-Loop gebaut** (`26a0007c` Inc 1, `c9463119` Inc 2):
-  `compact/HandleToolLoopCompactComponent` entscheidet zustandsbasiert nach jeder Tool-Runde (über
-  Agent-Budget ⇒ `agent.compact()` direkt, ein Versuch pro Turn; 95-%-Band ⇒ Hint; Stuck ⇒
-  `forceHint`). Ereignis-Gate `ranTool`/`isCompactedThisTurn` + `addCompactHintIfNeeded` ersatzlos
-  weg; `ThreadSafeMemory.providerUsageStale` (D3) verhindert, dass der Pre-Compact-Provider-Wert den
-  re-derived Zähler überschreibt. Surefire core 1214/0, Plugin-Build grün, Linter 9 pre-existing
-  (kein `UNBELEGT_ERLEDIGT`). Da Dok CONCERNS ohne Blocker (Plan §10). R-CC-18 ✅ in `compact.md` +
-  `index.md`; stale Methoden-Referenzen nachgezogen ([compact.md](compact.md) R-CC-4,
-  [context-message-concept.md](context-message-concept.md)). **Merge = Pauls Call** (voller
-  `clean verify` vor Merge einmal neu).
-- ❓ **Messung offen:** nach einem Compact `memory=`/`estimate=` gegen `n_prompt_tokens` stellen —
-  live gesehen: Report `~18772`, echter Request 175555 (Details: [open-points.md](open-points.md)).
-- ✅ **Nacht-Abschluss (2026-10-19, 03:46):** Branch **gepusht** (`origin/story/night-5-2026-10-16`
-  = HEAD). `mvn -B clean verify` grün: Core **1214/0/0/0**, OSGi **386/0/0 + 49 Skipped**,
-  Tycho/Feature/Update-Site SUCCESS. Codegraph-Header-Icon wieder **Lupe** (`2a238ad4`, Paul-Order
-  „icon wieder rein" — die Graphen-Glyphe war meine Fehlannahme). Alte Plan-Archive gelöscht
-  (`a2970053`), README-Korrekturen (Shell read-only, Surefire-Ground-Truth, Tippfehler) + Homepage
-  „after every tool round" + Codegraph-Prozess-❓ (`68caddb3`). Linter: **9 erwartete** Befunde,
-  keine neuen. **Merge = Pauls Call.**
-  *Lokal ungetrackt geblieben:* Pauls WIP (`AbstractAgent.java`, `AIChatView.java`, `agent/tools/`,
-  `feature-request-ShellTool.md`) und `peon-plan/overview-done-2026-10-19-03-37.md` (R-CC-18-Plan,
-  für Pauls Durchsicht).
-
-- ✅ **MCP-Ergebnisgröße (R-RS-3) gebaut** — `50be78cf`: `ToolService.execute` MCP-Zweig meldet
-  nach der Ausführung `MCP <name> done. (N chars)` (Start-Zeile bleibt). 2 Tests in
-  `ToolServiceGroupsTest` (Surefire 1203/0). **Verifiziert (Jon):** Fehlerpfad verliert nichts —
-  langchain4j wirft bei `isError=true` (`McpApplicationErrorException`/`ToolExecutionException`),
-  `McpService.executeTool` fängt und liefert `"MCP tool error (<name>): …"`; die null→`""`-Koersion
-  betrifft nur den echt leeren Fall (langchain4j nimmt keinen null-Text).
-- ✅ **Codegraph-Header-Icon = Lupe** (`50be78cf`): 4 SVGs ersetzt (on/dark/off/off_dark), gleiche
-  Dateinamen, kein Java-Wiring. Icon-Regeln (24×24 + viewBox, OFF als gedimmte SVG-Variante) in
-  [codegraph.md](codegraph.md) R-CG-8.
-
-- ✅ **Queued-User-Messages Regel 8 (`!`-Override) gebaut** — `14afd26c` (core:
-  `OverrideMessageResolver` + `AiAgent.injectUserMessage`/`AbstractAgent`, 11 Tests) ·
-  `42add1bd` (View: `AIChatView.resolveOutgoingMessage`, present ⇒ konsumieren, kein Queue/Turn).
-  Regeln: `!` gilt **nur bei `isWorking()`**; idle = Text **wie getippt** (Paul 2026-10-18);
-  `!` allein = konsumiert, nichts injiziert; `/cmd` im Rest wird aufgelöst (Body + Rest).
-  ⏳ **Risiko dokumentiert, nicht gelöst:** gleichzeitiger Compact kann die injizierte Message
-  clearen (`memory.clear()`) — kein Queue-Fallback. **Offen: View-Smoke M1–M6 (Paul).**
-- ✅ **Compact-Lock-Doku war stale** — Feature seit 2026-09-22 gebaut/gemerged (ADR-0052);
-  `docs/compact-lock.md` jetzt ✅ mit Beleg-Tabelle, UC-CT-3/5/6 = manueller Smoke offen.
-- ✅ **Manueller Rest des Zyklus (nicht gebaut, weil nicht mehr nötig):** ein voller
-  `mvn -B clean verify` ist grün (Core 1201/0, OSGi 386/0 + 49 Bestands-`@Ignore`, Tycho/feature/
-  update-site SUCCESS). Branch `story/night-5-2026-10-16` ist releasebar; Merge = Pauls Call.
-- ✅ **Docs-ID-Sweep:** `lintDocsAndTests` (voller Scope) läuft mit **9** Befunden — genau
-  UC-CT-3/5/6 (`UNBELEGT`, manueller Smoke) + UC-DEF-6/UC-JD-2…6 (`MANUELL`). Kein
-  `UNBELEGT_ERLEDIGT`, kein `VERWAIST` mehr. Warum es vorher nicht so war: (a) `UC-TF-1…4` waren an
-  Tests markiert, im Doc aber nicht als UC definiert → jetzt in [agent-tool-filter.md](agent-tool-filter.md)
-  als UC-TF-1/2/4 definiert (`UC-TF-3` bewusst NICHT — R-TF-3 ist compiler-gebunden, kein Test),
-  Marker in den Tests korrekt zugeordnet; (b) 38 UC-DL-Ids waren ✅ ohne erkennbaren Marker, weil die
-  Tests `// --- UC-DL-N: … ---`-Kopfzeilen nutzten (kein gültiger Marker) → Marker-Zeilen ergänzt;
-  (c) `UC-DL-28` (zwei Zusicherungen) wird jetzt von zwei Tests belegt (Doc-Text nennt sie).
-- ✅ **`java-debugger-tool.md` war stale:** R-JD-13 (Breakpoints ohne Session) und der
-  `debugJava*`-Rename sind **gebaut** (`JavaDebugTool.java:66` `NO_SESSION_MARKER_OP`,
-  `DebugBreakpointNoSessionTest` ×5, `DebugJsonUnitTest` ×2, kein snake_case-Rest) — Docs standen
-  auf ❌. Jetzt ✅ mit Belegen; manuell offen: Install-Pfad Marker → laufende VM.
-- ✅ **`tool-descriptions-inventory.md`:** doppelte Nummer `67` korrigiert (Continue → 68,
-  Suspend → 69).
-- ✅ **Tagged Results komplett (R-TR-1…9)** — Commits `f8a2fc23` (I1) · `6ff4c6eb` (I2) ·
-  `9b29d0c3` (I3) · `4f9b7e3e` (Nacharbeit: Windows-NL-Fix `ContextTrimComponent:177`, Test
-  `perMessageStage_sizesCapAgainstKLine_staysWithinBudget` mit Mutations-Nachweis) · Archiv
-  `ab6f46bf`. **Gates: Core Surefire 1189/0, OSGi 386/0.** Da-Dok: CONCERNS ohne Blocker.
-- **Was jetzt gilt:** `TaggedResult` ist der einzige Klassifikationsschlüssel (Compact über
-  Tag-Präfixe, kein `instanceof`); reine Context-Blöcke werden **vor** dem Compact gedroppt
-  (`context blocks dropped: K`); **kein Cap im Renderer** (`RenderOptions` gelöscht → ADR-0056
-  teilweise superseded); `INFO` einmal in der static System-Message; Bild eines Datei-Contexts ist
-  sein Block, dedupKey = Block-Startzeile (ADR-0029 teilweise superseded).
-- **Pauls WIP unangetastet** (nicht committet, nicht anfassen): `ShellTool.java`,
-  `ThreadSafeMemory.java`, `agent/tools/**`, `test/agent/model/**`, `feature-request-ShellTool.md`,
-  `AbstractAgent:375` (`"tokens (estimate)"`), `AIChatView` R-SEL-2.
-- Vorher im selben Branch: R-CG-7-Nachschärfung (`d38c8ab4`), Zwei-`serve --mcp`-Fix (`fe583895`,
-  ADR-0069), Bounded-Caches ✅, Codegraph ✅.
+- **Branch fertig, Review/Smoke ausstehend (Paul).** Alle Cleanup-Commits ab `2634140f`
+  liegen nur lokal — origin steht bei `89aafcb` (Pauls Sync ~08:13); alles danach ist
+  **unpushed** (aktuelle Zahl: `git rev-list --count origin/story/workspace-nesting-2026-10-19..HEAD`).
+  Paul macht das finale Review lokal.
+  Inhalt: Housekeeping (6 Skills + AGENTS-Straffung `35c5219f`) · Prompt-Trims po/planner (`ce3beb93`)
+  · Restore (`440304c7`) · Release-Doku-Auflösung (`636f5e26`, ADR-0072) · Docs-Cleanup
+  (`89aafcb`) · Externe-Review-Fixes + finaler Docs-Cleanup (`2634140f`, `b888f25d`, `d60b00a1`).
+- **Zyklus vollständig abgeschlossen:** resolved-points-Links gefixt, Skill `peon-release`
+  (Build-Guard, Update-Site = `https://sterlp.github.io/eclipse-peon-ai/`), Homepage-Install-URLs,
+  compressor.md Disclosure-Rewording (Paul „passt"), lintDocs über docs/: 0 findings.
+- **Nach Pauls Review/Smoke:** Merge/Tag 2.14.1 (siehe Offen für Paul) + Push.
 
 ## Offen für Paul (Details: [open-points.md](open-points.md))
 
-1. ❓ **Codegraph-Smoke nach Eclipse-Neustart** — es darf nur **ein** `serve --mcp`-Prozess laufen;
-   Icon ON/OFF/FEHLER + `codegraph_explore` in Jon/Dev prüfen. Danach **Merge → main** (Pauls Call).
-2. ❓ **`codegraph` in der Tool-Auswahl** — welcher Agent/Slot soll es standardmäßig haben?
-3. ❓ **R-*-Regeln haben kein Linter-Gate** (`DocsLinter:241/254`) — R-only-Docs sind nur durch
-   Da-Dok abgesichert. Entscheidung: R-Form als Definition zulassen oder UC ergänzen?
-4. ❓ **`AIChatView.applyTextSelection`** (Pauls WIP): früher Return bei disposed parent überspringt
-   jetzt auch `setTextSelection` — bewusst oder Nebeneffekt?
-5. ❓ **Untracked** `peon-plan/codegraph-smoke-findings.md` + 2 alte `overview-done-*`: überführen
-   und löschen, oder committen.
-6. ❓ **Smoke `!`-Override (M1–M6)** — working: injiziert + History-Zeile, kein Queue-Echo; idle:
-   Text wie getippt; `!` allein: nichts passiert; `!/cmd`: Body + Rest. View-Wiring ist
-   compile-grün, aber nicht automatisiert getestet (`AIChatView.resolveOutgoingMessage`).
-7. ❓ **Smoke Compact-Lock UC-CT-3/5/6** — Queue im UI, Fehlerfall, Roster „working".
-8. ⏳ Reserved-Name `codegraph` (ADR-0068) · ⏳ Icon-Visuals Q2=(a) · ⏳ S3 (🗜 in
-   PoDelegateTool/AgentsTool) blockiert auf Pauls WIP-Merge.
+1. ❓ **Merge/Tag 2.14.1** — `story/workspace-nesting-2026-10-19` lokal fertig (Core 1231/0,
+   OSGi 399/0); vorher `mvn -B clean verify`. Smokes: Dev/Plan/Review gleicher Prozentsatz ·
+   Delegation-Compact > 70 % vor Auftrag · Monorepo · Codegraph nach Neustart.
+2. ⏳ **Delegations-Compact feuert pro Delegation** (Kosten, ADR-0071) — Faktor anheben oder nur
+   bei Themenwechsel? Rückversicherung steht aus.
+3. ⏳ **Compact-Briefing-Schema** für `compressor.md`: 3 Ergänzungen vorgeschlagen (STANDING-RULES-Slot,
+   preserve-Pfade erweitern, memory.md = complement-not-replace) — Freigabe steht aus.
+4. ❓ Fixture-Duplikat in ≥3 core-Testklassen · ❓ R-Regeln ohne Linter-Gate (`DocsLinter:241/254`)
+   · ❓ In-Loop-Direkt-Compact fängt Exceptions nicht (R-CC-20.5-Nachbarloch) · ⏳ Reserved-Name
+   `codegraph` · ⏳ R-CG-15 Monorepo-State-Refresh · ⏳ R-CC-19-Semantik+Tilde · ⏳ Windows-
+   `cmd /c`-Fallback · 🔒 S3 (🗜 in PoDelegateTool) blockiert auf Pauls WIP-Merge.
 
 ## Backlog (nächste Session)
 
-- **Async-Shell-Tool — Paul-Prio 2026-10-18: wichtiger als async Agents.** Danach
-  **async Agents** (Top-3 in [async-agents.md](async-agents.md), Mutable-`request`-Merge-Check-Item
-  vor dem Bau).
+- **Async-Shell-Tool — Paul-Prio** (wichtiger als async Agents). Danach async Agents (Top-3 in
+  [async-agents.md](async-agents.md)).
 - **TempFileTool** — Slice 2 Output-Trim 🚧 in design.
-- **Compact-Lock ✅ (Docs waren stale):** war seit 2026-09-22 gebaut und gemerged; 2026-10-18 am
-  IST verifiziert (R-CT-1…4 + UC-CT-1/2/4 automatisiert, Core 1190/0). **Offen: Paul-Smoke
-  UC-CT-3/5/6** (Queue im UI, Fehlerfall, Roster).
-- Bug-Backlog: Fehlerklassen-Tabelle R-CC-7/ApiRetry (❓), Header-State-Leak (❓, IST-Messung
-  offen), Context-Overflow-Zyklus (❓ Auto-Compact, Pollution, Memory-Snapshot), McpService
-  `connect()`-Rollback-Test (offen seit ADR-0069).
+- R-CG-14 (Generation + `disposed` statt Lock) · R-CIB-4 Stufe 2 · R-CC-7 Fehlerklassen-Tabelle
+  ApiRetry (❓) · Header-State-Leak (❓) · Context-Overflow-Zyklus (❓) · McpService
+  `connect()`-Rollback-Test (ADR-0069).
 
 ## Notizen
 
-- **Riesige Tool-Args killen den Call:** Plan- und Dev-Agent liefen je einmal in Provider-400
-  „175155 > 175104 tokens". Gegenmittel: `clear*` vor dem Versuch, kurze Prompts, Agent schreibt
-  lange Pläne/Berichte als Datei.
-- **Windows-Falle im Renderer:** In mit `System.lineSeparator()` gebauten Strings **immer**
-  `indexOf('\n')` (Zeichen) suchen, nie `indexOf(System.lineSeparator())` — sonst landet das `\r` im
-  Index und `+1` schneidet mitten im Newline.
-- `eclipseEditFile` verschluckt gelegentlich Parameter („oldString is required") — Fallback
-  `eclipseReplaceLines`/`diskEditFile`, danach Read-back (AGENTS.md).
-- Ledger `.agents/skills/wiki/skill-impact.md` gehört mit dem Zyklus committed.
+- **System-Prompts generisch halten** (Paul 2026-10-20): nichts Repo-Spezifisches, minimale
+  Änderungen, keine Docs-Inhalte — nur Verweise; Best Practice für alle Projekte (ABAB, C++, Java …).
+- **Untracked, NICHT committen:** Pauls WIP (`org.sterl.llmpeon.core/…/agent/tools/**`,
+  `bad-context-codegraph.md`, `peon-plan/`); `non-peon-ai-agents-md/` veraltet — Paul löscht selbst.
+- **Tool-Trap:** `diskRenameResource` kann Erfolg melden ohne zu verschieben — nach Renames immer
+  mit `diskListDirectory`/`diskSearchFiles` verifizieren.
+- **Windows-Falle im Renderer:** in `lineSeparator()`-Strings immer `indexOf('\n')` suchen.
+- **UserMessage-Join in `ThreadSafeMemory.add`:** Seed-Fixtures ggf. `AiMessage` als Trenner.
+- **Surefire-Ground-Truth + Commit-Hash aktiv einfordern** — DONE-Claims gegen den IST prüfen.
