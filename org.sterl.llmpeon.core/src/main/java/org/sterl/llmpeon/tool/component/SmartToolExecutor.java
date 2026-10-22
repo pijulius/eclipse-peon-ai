@@ -39,14 +39,17 @@ public class SmartToolExecutor {
             tool.withToolRequest(req);
             return executor.execute(request, request.id());
         } catch (IllegalArgumentException e) {
-            var msg = e.getMessage();
+            var msg = messageOf(e);
             reportProblem(request, req, msg);
             return msg;
         } catch (ToolExecutionException e) {
-            if (ExceptionUtil.isCanceled(e)) throw e; // cancellation bubbles up — not an error
-            if (e.getCause() instanceof IllegalArgumentException ex) {
-                reportProblem(request, req, ex.getMessage());
-                return ex.getMessage();
+            if (ExceptionUtil.isCanceled(e)) throw e; // cancellation wins — not a tool error
+            // R5: a denial anywhere in the cause chain is a tool error — the model gets its message verbatim
+            var denial = ExceptionUtil.findCause(e, IllegalArgumentException.class);
+            if (denial != null) {
+                var msg = messageOf(denial);
+                reportProblem(request, req, msg);
+                return msg;
             }
             throw e;
         } catch (Exception e) {
@@ -61,5 +64,11 @@ public class SmartToolExecutor {
             ToolLoopRequest req, String msg) {
         if (msg != null && msg.length() > 200) msg = msg.substring(0, 180) + "...";
         req.getMonitor().onProblem(request.name() + ": " + msg);
+    }
+
+    /** D10: a model-facing message is never null — a null message means the class's toString(). */
+    private static String messageOf(Throwable t) {
+        var msg = t.getMessage();
+        return msg != null ? msg : t.toString();
     }
 }
