@@ -3,6 +3,94 @@
 Status je Punkt: ❓ offen · ⏳ selbst entschieden (Rückversicherung mit User steht aus) · 🔒 geklärt.
 Geklärte Punkte ohne eigenes Feature-Doc: [resolved-points.md](resolved-points.md).
 Aufgeräumt 2026-10-14 (Paul-Order): Gelöste → resolved-points.md, Wertloses gelöscht, Rest komprimiert.
+## Release-Doku-Auflösung (2026-10-20) — github-eclipse-repo.md aufgelöst (ADR-0072)
+
+- ❓ **JAR-Signing:** Update-Site-Plugins sind unsigniert — Eclipse warnt beim Install. Sign-Zertifikat besorgen und release.yml erweitern? Aufwand vs. Nutzen klären.
+- ❓ **Auto-Create GitHub Releases:** `release.yml` deployt nur die Pages-Site, erzeugt aber kein GitHub Release (Changelog/Asset). Soll ein Release-Step (Tag → Release, Binary-Attach) dazu?
+- ⏳ **p2-Pfad-Verifikation:** **Update-Site bestätigt (Paul 2026-10-21): `https://sterlp.github.io/eclipse-peon-ai/`** — `p2.index` dort 200 (2026-10-19 gemessen); `https://peon-ai-4e.sterl.org/p2.index` → 404 (Root = VitePress-Homepage). Homepage-Installation + Skill `peon-release` sind darauf umgestellt. **Rückversicherung:** nach dem nächsten Release messen, wohin `deploy-pages` die Update-Site tatsächlich legt (sterl.org oder github.io), und SKILL + Homepage-Installation abgleichen.
+- ⏳ **Compact-Briefing-Schema (compressor.md):** 3 Ergänzungen vorgeschlagen — STANDING-RULES-Slot
+  (Pauls dauerhafte Verhaltensregeln als eigener Block), preserve-Pfade erweitern, memory.md =
+  complement-not-replace (Briefing ergänzt memory.md, ersetzt es nicht). Freigabe Paul steht aus.
+
+
+## 2.14.0 (2026-10-19) — Jon-Entscheidungen zur Rückversicherung
+
+- ⏳ **R-CC-19 (Zähler = Provider-Input + Schätzung der angehängten Messages):** von Jon entschieden
+  (Overflow-Klasse, für die R-CC-18 allein nicht reicht). Folge: R-CC-6 ist präzisiert — „Provider-
+  Wert ohne Tilde" gilt nur unverändert; nach `addResult` trägt der Zähler einen geschätzten Anteil
+  und zeigt `~`. **Rückversicherung:** Paul bestätigt Semantik + Tilde, oder wir nehmen
+  `updateTokenCounter` zurück (dann R-CC-18 wieder auf dem alten, blinden Zähler).
+- ⏳ **Codegraph-Icon-Motiv:** Paul-Entscheid 2026-10-19 — Header zeigt die **Codegraph-Glyphe**
+  (Lupe gehört zur Suche); `2a238ad4` per Datei-Restore zurückgenommen, Doku (R-CG-8) angeglichen.
+- ⏳ **Codegraph-Windows-Fallback `cmd /c codegraph serve --mcp`:** von Jon entschieden und im
+  Factory-Test gepinnt, aber **auf Windows ungetestet** (Maschine = macOS). Bei Pauls nächstem
+  Windows-Lauf prüfen: startet der Server ohne absoluten Binary-Pfad?
+
+## 2.14.1 (2026-10-19) — externes Review TOP 1–3: Jon-Entscheidungen
+
+- ⏳ **Delegations-Compact feuert pro Delegation, nicht pro Turn** ([ADR-0071](adr/0071-compact-policy-owned-by-delegation.md)):
+  Jeder Jon-Call an einen Sklaven (`askDev`, `buildWithDev`, …) compactet ihn, sobald er über 70 % liegt —
+  auch mitten in einer laufenden Story. Das ist Pauls SOLL („vor jeder neuen Aufgabe"), die **Kosten**-Folge
+  ist neu: mehrere Delegationen hintereinander können mehrere Compressor-Calls auslösen. Falls das zu
+  teuer ist: Faktor anheben (eine Konstante in `PoDelegateTool`) oder nur bei einem Themenwechsel
+  compacten. Rückversicherung Paul.
+- ❓ **Test-Fixture-Duplikat (Da-Dok CONCERNS 2, 2026-10-20):** StreamMock/monitor/ProbeTool-Fixture
+  in ≥3 core-Testklassen nur namentlich dupliziert (`AbstractAgentPreTurnCompactTest`,
+  `AbstractAgentCompactResultTest`, `AiDeveloperAgentTest`). Bagatelle — eigener Micro-Zyklus
+  (gemeinsame Test-Fixture im core) oder weiterleben? Jon-Empfehlung: erst wenn die vierte Kopie
+  entsteht.
+
+- ⏳ **R-CG-15 neu (Projektwechsel im Monorepo):** Befund **bestätigt** — `CodegraphConnectionService:106`
+- 🔒 **Jon ohne Hint-Band vor dem Pre-Turn-Compact (Paul 2026-10-20):** kein Hint-Band am Turn-Anfang,
+  für niemanden — der Compact läuft vor der frischen Message (R-CC-20.1), der Compressor preserved die
+  History als Summary, Kuratierung läuft über persistiertes `memoryAdd`. Entscheidung in
+  compact.md R-CC-20.2 festgehalten.
+- ❓ **In-Loop-Direkt-Compact fängt Exceptions nicht (Nachbarloch von R-CC-20.5):** wirft der Compressor
+  im Tool-Loop (`HandleToolLoopCompactComponent.handle` → `agent.compact()`), stirbt der ganze Turn —
+  seit R-CC-18. Nichts geht verloren (Messages sind im Memory), aber der gleiche Fehler, der R-CC-20.5
+  heilt, gehört auch hier hin. Scope bewusst nicht im R-CC-20.5-Fix erweitert.
+  kehrt bei gleichem `workDir` zurück, `State.project` bleibt A, `CodegraphContextItem` mappt weiter A.
+  SOLL geschrieben: Verbindung bleibt, State-Refresh auf B. Nebenwirkung, die Paul kennen sollte:
+  jeder Projektwechsel mit gemeinsamem Index erzeugt **eine neue Chat-Zeile** (Dedup-Key ändert sich);
+  Alternative wäre ein Live-Projekt im Item (dann zwei Wahrheiten: State + Supplier).
+- ⏳ **R-CG-14 Fix-Mechanik präzisiert:** der Reviewer schlug „Adopt und Disconnect über denselben
+  Lock" vor — Jon: **nein**, ein Lock über `service.connect()` lässt Dispose auf einen 5–10-s-Spawn
+  warten. Spezifiziert: Generation + `disposed`-Flag, Prüfung nach dem Connect, Lock nur um den
+  kurzen Zustandswechsel. Ergänzt: eine stale Generation schreibt auch **kein** `setMcpEnabled`
+  (der `finally` in `McpConnectionService.connectServers` würde sonst einen Toggle-OFF überschreiben).
+- ✅ **TOP 3 (Compact `result:`-Marker):** kein neuer Befund — identisch mit R-CIB-4 Stufe 2
+  (❌ specified 2026-10-19: `lastOccurrence` raus, das erste Vorkommen ist immer strukturell).
+
+## 2.14.1 (2026-10-19) — Workspace-Nesting: Jon-Entscheidungen zur Rückversicherung
+
+- ⏳ **Ergebnis-Limit schlägt Tiefe (R-WN-1):** Ist das Limit erreicht, wird ein schon gelieferter
+  Duplikat-Eintrag nicht mehr auf die tiefere Sicht umgeschrieben (kein Volldurchlauf nach dem Cap);
+  die Datei zählt weiterhin einmal, das Limit ist benannt. **Von Jon entschieden** (Performance gegen
+  ein Rand-Kosmetikum: der Pfad zeigt dann den Parent, die Datei ist trotzdem nur einmal da).
+  Alternative wäre ein Volldurchlauf nach dem Cap — bei jedem großen Monorepo-Search teuer.
+- ⏳ **„Gleich tiefe Projekte → zuerst gefundener Pfad bleibt" bleibt ungetestet (Da-Dok F1):**
+  der Fall ist nur bei **demselben** Ordner zweier Projekte beobachtbar, und Eclipse lehnt ein zweites
+  Projekt am selben Ordner normalerweise ab (gleicher Disk-Pfad = gleiche Datei; anderer Disk-Pfad =
+  andere Datei, kein Dedup-Fall). Die `!equals`-Zusicherung bleibt als Defensive stehen — sie ist im
+  Test-Workspace nicht rot zu bekommen. **Rückversicherung:** Paul akzeptiert das, oder wir bauen den
+  Guard ab (dann müsste irgendwo belegt sein, dass Eclipse gleiche Projekt-Ordner ausschließt).
+
+## ❓ Doc-Aufräum-Slice: Belege, Messungen, Vorfälle raus aus den Feature-Docs (Paul 2026-10-19)
+
+- **Paul-Entscheid:** Die Regel im PO-Prompt („Belege, Messungen und Gegenproben liegen in
+  `peon-plan/`, nie in `${docs}`") **bleibt** — es trägt keinen Mehrwert im Fachdoc. Der Bestand ist
+  entsprechend nicht-konform und wird aufgeräumt (kein Release-Blocker).
+- **Was bleibt:** fachliches SOLL **und** fachliches IST je Regel — genau ein Statusmarker
+  (🚧 / ❌ / ✅). Der Anker ist die **ID**, nie der Testname: 1 BDD → 1..n Tests, der Test trägt
+  `// R-…` / `// UC-…`. **Was fliegt:** Commit-Hashes, Surefire-Zahlen, Messreihen,
+  Vorfall-Erzählungen, Beleg-Tabellen **und Testnamen im Fließtext** (sie brechen bei jedem Rename).
+- **Bekannte Kandidaten (beim Aufräumen per Grep vollständig inventarisieren, nicht nur diese):**
+  `compact-lock.md` (Beleg-Tabelle), `codegraph.md` (Fakten-Bullet), `java-debugger-tool.md`,
+  `compact.md` (Commit-Hashes in R-Zeilen), `tagged-results.md`, `bounded-caches.md`.
+- **Ablage:** Belege nach `peon-plan/` (z. B. `peon-plan/belege/<feature>.md`), sonst ersatzlos —
+  git hat die Historie.
+
+
 
 ## Context-Overflow / ContentProvider Bug-Zyklus (Paul-Order 2026-10-14 — nächster Zyklus)
 
@@ -45,6 +133,47 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   Nested-Calls würden um latch/responseRef racen; heute keinen, Revisit mit
   async-agent-tools-proposal.md.
 
+## Tagged Results — Nachträge (Zyklus 2026-10-18)
+
+- ❓ **R-*-Regeln haben kein Linter-Gate (2026-10-18):** `DocsLinter:241` nimmt `R-*`-Definitionen
+  nicht in `defById` auf, `:254` überspringt sie im ✅-Check. Mit UC-only `idPattern` sind
+  `// R-…`-Testmarker unsichtbar; mit einem Muster, das sie einschließt, werden sie `VERWAIST`.
+  Folge: R-only-Docs (`tagged-results.md`, `compact-input-budget.md`, `compact.md`) haben **kein**
+  maschinelles ✅-Gate — Da-Dok-Review ist die einzige Absicherung. Optionen: (a) R-Form als
+  Definition zulassen (Überschriften `#### R-<F>-<n>`, wie bei UC), (b) solche Docs zusätzlich mit
+  UC-Use-Cases ausstatten. Ohne Entscheidung bleibt der Linter blind für einen Großteil der Docs.
+  *(Nebenbefund 2026-10-18: `codegraph.md` hat `idPrefix: CG` bereits, `mcp.md` keins — beides
+  ändert an diesem Problem nichts, weil R-Definitionen im Linter grundsätzlich übersprungen werden;
+  `idPrefix` allein ist also kein Fix.)*
+  **Falle (2026-10-19, 2 Findings im eigenen Lauf):** eine Überschrift, die **mit einer Regel-ID
+  beginnt** (`## R-CC-18 — Nachträge …` in dieser Datei), wird als Definition geparst →
+  `PRAEFIX_FEHLT` bzw. `DOPPELT_DEFINIERT`. Punkt-Überschriften neutral formulieren (ID erst nach
+  dem ersten Wort), sonst „definiert" man eine Regel in einer Notizdatei.
+- ❓ **`AIChatView.applyTextSelection` — geändertes Verhalten bei disposed parent (Pauls WIP,
+  2026-10-18, nicht committet):** das Refactoring (`if (parent == null || parent.isDisposed()) return;`)
+  überspringt jetzt **auch** `uc.setTextSelection(ts)`; vorher lief die Selektion weiter, nur der
+  Refresh unterblieb. Wenn das bewusst ist: kein Punkt. Wenn nicht: der frühe Return muss hinter
+  `setTextSelection`.
+- 🗑 **Untracked Session-Artefakte — ✅ erledigt (2026-10-19):** die Findings sind nach
+  `open-points.md` (Codegraph-Konflikt) überführt, die Smoke-Datei und die alten Archive sind
+  gelöscht; `peon-plan/` enthält nur noch den heutigen Zyklus-Plan (lokal, untracked).
+
+## Nachträge zum Compact-Zyklus (R-CC-18, 2026-10-19)
+
+- ❓ **Estimate vs. gesendetes Payload (2026-10-19, live gemessen):** `compactDev` meldete
+  `~18772 (estimate)`, der nächste Delegate-Call ging mit **175555** Tokens raus und starb am
+  `n_ctx` 175104 (2×). D3/`providerUsageStale` erklärt den **Zähler** (stale Provider-Wert
+  überschreibt den re-derived Wert) — ob damit auch das Payload wieder zur Anzeige passt, ist
+  **nicht** gemessen. Nach dem Merge reproduzieren: nach einem Compact den `memory=`/`estimate=`-
+  Diagnose-Dreiklang gegen `n_prompt_tokens` des Fehlers stellen. Wenn die Divergenz bleibt, liegt
+  sie außerhalb des Zählers (per-Turn-Injektion, Static, Sub-Loop) → zurück in den
+  [Context-Overflow-Zyklus](#context-overflow--contentprovider-bug-zyklus-paul-order-2026-10-14--nächster-zyklus).
+- ⏳ **Klassen-Zyklus `compact` ↔ `tool` über die `COMPACT_HINT`-Konstante (2026-10-19):** die neue
+  Komponente sitzt in `compact` (richtig) und liest `ToolService.COMPACT_HINT`; `ContextTrimComponent`
+  tat das schon vorher. Bewusst nicht mit-gefixt (D6, sonst hätte ein Lösch-Inkrement eine
+  Konstante verschoben) — Cleanup-Kandidat: Konstante nach `CompactConstants`, dann ist
+  `compact`→`tool` nur noch `tool.model` (Datenmodell). Kein Verhaltensrisiko, reine Struktur.
+
 ## Bug-Fix-Backlog
 
 - ❓ **Fehlerklassen-Tabelle — R-CC-7 + ApiRetry, eine Tabelle zwei Verbraucher:** transient →
@@ -85,37 +214,46 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
 - **Docs-Linter ☠️-Status (2026-09-29):** DocParser kennt nur ✅/❌/🚧 (`DocParser.java:209-216`)
   — ein `####`-UC-Heading mit ☠️ wirft STATUS_FEHLT (Fall: default-inheritance.md UC-DEF-4/5/7
   mussten zu Fließtext degradiert werden). Kandidat: ☠️ als Info-Status.
-- **Context-Noise zuerst raus (2026-09-13):** Context-Item-Messages vor dem Kürzen nehmen —
-  „Light-Version" des Input-Budgets; das Input-Budget deckt das Staging, Noise-Entfernung bleibt
-  eigener Punkt.
 - **BDD-Test Compact-Hint-Fallback:** Regel gebaut (`29a341b`), Paul: „wann anders" — Backlog.
 
 ## ⏳ Mini-Cleanups / geparkt
 
-- **TrimService-Story (Paul 2026-09-29, nächster „Architecture & Bug Sprint"):** Head/Tail/Trim
-  wird quer repliziert (ShellTool-Tail, Compact-Stufenkürzung, Tool-Output-Caps, LogExcerpt,
-  webFetch-Paging) → gemeinsame Klasse `TrimmedResult`: eine Stelle kürzt + disclosed.
-  Konvention: Zeilen zählen/zusammensetzen im Trim-Pfad mit **literal `\n`** statt
-  `lineSeparator()` (plattformunabhängig), dokumentiert in `TrimmedResult.toString`.
-  Grundlage: `ShellTool.java` · Verwandtes: `LogExcerpt`, `TextFileTypes`, Input-Budget,
-  Tool-Output-Disclosure.
+- **TrimService-Story — 🔒 gelöst 2026-10-17 (OutputTrim Slice 1):** gemeinsame Klasse gebaut
+  (`OutputTrim`, core/shared) — Shell + Grep migriert, Details/Commits:
+  [output-trim-service.md](output-trim-service.md). Rest-Backlog unten.
+- ❓ **Read-Tools-Rollout auf `OutputTrim` (2026-10-17):** `eclipseReadFile`/`diskReadFile` clampt
+  Bereiche, aber nicht über die Trim-Komponente (Head/Tail-Disclosure) — Migration = eigenes
+  Inkrement, kein Eile (Paul). Auch Kandidat: `LogExcerpt`/webFetch-Paging auf `OutputTrim`
+  vereinheitlichen (vgl. TrimService-Bullet oben).
+- ❓ **Pauls ShellTool-WIP uncommitted (2026-10-17, im Tree):** Parameter-Rename
+  `workingDirectory` → `workDir` + `@P`-Text („disk path, default current project") + Error-Message
+  mit Default-Ausgabe — Tool-Schema-Change über alle `shellRunCommand`-Aufrufer (Clean Break).
+  Wir haben es NICHT committed/gebaut (2. Positional-Param-Rename in der Story). Paul committet
+  die WIP-Änderungen selbst nach kurzem Review (2026-10-17); SOLL klären: Rename bestätigen +
+  shell-tool.md R3/Docs nachziehen, oder zurückrollen.
+
 - **Think-BDD-Lücken (a)–(g) (2026-09-27, Da-Dok-Provider-Think-Audit):** (a) Gemini
   buildModel-Thinking-Branch, (b) OpenAI-Off-Varianten `FALSE`/`No`/` Off `, (c)
   GITHUB_COPILOT/GITHUB_MODELS Request-Params, (d) Anthropic konkret-Level + unknown string,
   (e) LM Studio extra_body-Override, (f) OPEN_AI_OFFICIAL reasoningSummary=DETAILED, (g)
   custom-agent×OpenAI nur Signatur-Smoke. Plus: `ThinkModelMapping.Entry.off` geparst aber
   ungenutzt; `AiAgent.isThinkEnabled()` (deprecated Default) Sterben-Kandidat.
-- **slf4j-simple.jar wird mitgebündelt (2026-09-25):** trotz eigenem `EclipseSlf4jProvider`
-  (`MANIFEST.MF:96`, `build.properties:65`, Plugin-`pom.xml:23-27`) — Jar + Dependency bei
-  nächster Berührung raus, Build + Plugin-Lauf testen.
+- ⏳ **slf4j-simple — 🔒 gelöst 2026-10-17 (`8e6bcb54`):** Jar + Dependency aus Plugin-pom/
+  MANIFEST/build.properties entfernt — gebautes Bundle enthält exakt EINEN Provider
+  (`EclipseSlf4jProvider`), Plugin-Suite 352/0 ohne SLF4J-Warnung. **→ resolved-points.md.**
+  ⏳ Verbleibender Design-Punkt: slf4j-api ist **nicht OSGi-resolved**, sondern gebündelt
+  (`lib/slf4j-api.jar`, aktuell 2.0.19 → 2.0.18 beim nächsten clean — Patch-Drift harmlos);
+  Pauls Annahme eines `Require-Bundle`-Ranges `[2.0.0,3.0.0[` existiert im IST nicht. Falls
+  Paul slf4j-api künftig von der Platform resolved will (Bundle in Target + Require-Bundle +
+  lib-Jar weg): eigene Story, kein Bug-Anlass.
 - **Jackson 2 → 3 beobachten (2026-09-10):** Migration erst bei voller Entfernbarkeit
   (openai-java pinnt Jackson 2; 5 eigene Dateien; Error-Path → ApiRetry-Klassifikation prüfen).
   Revisit-Trigger: langchain4j 1.21+ / openai-Jackson-3. Dann eigene Story mit ADR.
 - **Edit-Tools Naming + gemeinsame Doku (geparkt 2026-09-05):** Rename auf „Edit"
   (`eclipseUpdateOpenFile`→`eclipseEditOpenFile`, `planUpdate`→`planEdit`), gemeinsame
-  `edit-tools.md`, `planUpdate` Count-Disclosure nachziehen. **Konflikt mitfixen:**
-  eclipse-workspace-write-file-tool.md sagt noch „Errors if 0 or >1 matches" (widert Replace-All
-  + Count). Line-Ending-Normalisierung: E2E-Spec `file-edit-tools.txt`.
+  `edit-tools.md`, `planUpdate` Count-Disclosure nachziehen. Line-Ending-Normalisierung:
+  E2E-Spec `file-edit-tools.txt`. *(Der frühere Doc-Drift „Errors if 0 or >1 matches" in
+  eclipse-workspace-write-file-tool.md ist korrigiert.)*
 - **Docs-SOLL-Hygiene-Sweep (2026-09-12):** Docs = reines SOLL, keine „war:"-Narrativen;
   umgesetzt für advanced-configuration + model-loading, Rest als eigener Aufwasch (Scope von
   Paul bestätigen lassen).
@@ -132,8 +270,6 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
 
 ## Sonstiges
 
-- ⏳ **Homepage `peon-po.md` listet das Team ohne Da Dok** — Korrektur im nächsten
-  Homepage-Kontakt.
 - ⏳ **User-Smoke Header-Compact-Buttons:** Optik ✅; ausstehend: Re-Compact-Noop,
   Disabled-States, Tooltip — nach Merge.
 - ⏳ **AGENTS.md-Ambiguität „Homepage-Doku: Dev-Inkrement vs. PO-Docs-Zyklus"** → Merge-Gate
@@ -171,9 +307,88 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   `parseAllowlist` zu null normalisiert, aber der Typ trägt die Unterscheidung nicht). Sealed
   `All`/`Filtered(allow, deny)` würde Sonderregel „nur Negationen" in eine testbare Resolve-Funktion
   ziehen. Gestaltungspunkt, kein Defekt — Revisit, falls ToolPolicy erneut angefasst wird.
-- ⏳ **EclipseGrepTool IFile-Disclosure (Da-Dok-CONCERN, 2026-10-16):** der IFile-Zweig (:68-69) wendet
-  bei Datei-Target **keinen** Extension-Filter an, aber `grepComplete` (:82-83) / onTool (:88-89)
-  disclosen die rohe Extension — dieselbe Text/Inhalt-Diskrepanz, die Inc-C-EXT auf der Disk-Seite
-  gefixt hat (AGENTS „one behaviour, one implementation", Familien-Parität). Fix = C-EXT-Muster
-  (effectiveExtension beim Datei-Target null), Details + Zeilen in peon-plan-§9 (Archiv). **UNBLOCKED
-   2026-10-16:** Pauls WIP ist mit `af658e0f` gemerged (EclipseGrepTool inkl. 🔍-Präfix) — Umsetzung offen.
+
+## Codegraph-Bau (2026-10-17, autonome Entscheide Jon — Rückversicherung Paul)
+
+- ⏳ **Reserved Name `codegraph` UNBEDINGT reserviert (Q1, Jon-Entscheid a):** der Name `codegraph`
+  ist im User-MCP-Pfad immer reserviert (Filter in `McpConnectionService.connectServers`), auch
+  wenn das Built-in inaktiv ist — manuelle Einträge werden gefiltert (Log-Zeile), Randwirkung: ein
+  bestehender reiner Workaround-Eintrag funktioniert NICHT mehr, sobald diese Version läuft
+  (Workaround stirbt komplett, unabhängig vom Built-in-State). Begründung: Clean Break, Name
+  gehört dem Built-in (Homepage: „Eintrag löschen"), keine State-Kopplung User-Pfad ↔ Built-in.
+  **Paul kann beim Review umwerfen** → dann State-abhängiger Filter (mehr Code, Kopplung).
+- ⏳ **Icon-Visuals (Q2, Jon-Entscheid a):** ON = `codegraph.svg`, OFF = gleiches Icon
+  disabled/gedimmt, ERROR = Platform-Icon `ImageUtil.STOP`; `codegraph_dark.svg` erzeugt Da Mek
+  nach Hammer-Muster (kein neues Design-Asset von Paul nötig — Gegencheck nach Rückkehr möglich).
+
+
+## Codegraph-Nachtzyklus 5 (2026-10-17) — geparkt
+
+- ❓ **S3 (🗜 in PoDelegateTool/AgentsTool) nur halb machbar:** der AgentsTool-Teil liegt in
+  Pauls untracked WIP (`agent/tools/` — TABU, 🚧 Async-Review offen). PoDelegateTool-Teil
+  (🗜 auf den compact*-Delegates) wäre machbar, halber Rollout = Inkonsistenz zwischen beiden
+  Delegate-Tools. Paul entscheidet: PoDelegate-Teil vorab bauen, oder S3 komplett nach
+  AgentsTool-Merge. Kontext: [icons.md](icons.md).
+
+
+## Codegraph-Toolset-Erweiterung (2026-10-17, Paul-Frage — ❓ Entscheidung ausstehend)
+
+- ❓ **Mehr Codegraph-Tools registrieren (R-CG-6-Änderung, 2026-10-17):** Paul fragte nach dem
+  Toolset (`node/search/callers/callees/impact/files/status` — per Default NICHT verbunden, nur
+  `codegraph_explore`; Re-Enable serverseitig via `CODEGRAPH_MCP_TOOLS`). Jon-Befund: `explore`
+  deckt callers/callees/impact/Source in einem Call ab; Spezialtools lohnen v. a. für billige
+  Location-Lookups. **Jon-Empfehlung: `CODEGRAPH_MCP_TOOLS=explore,search,files`** (3 Schemas
+  statt 7 — jedes Extra-Schema kostet Context in allen Agenten pro Turn), umgesetzt als kleiner
+  Slice in `CodegraphServerFactory` (Env in der Config) + R-CG-6/R-CG-10-Text-Anpassung.
+  **Nicht gebaut** — R-CG-6 ist Pauls SOLL (explore-only); Änderung erst nach Paul-Rückkehr.
+  Kein rekursiver USER_HOME-Binary-Scan (Probe deckt `which` ab: `~/.local/bin` Suchort #1 +
+  PATH-Scan, E2E-Beleg auf Pauls Maschine — Detail in codegraph.md Fakten).
+
+
+## Codegraph-Smoke (2026-10-18, Paul) — Befunde
+
+- 🔒 **Zwei `serve --mcp`-Prozesse — gelöst (2026-10-18, `fe583895`):** war ein **Bug**, kein Design:
+  jede Registry baute ihren eigenen `McpService` (je Server ein Prozess). Fix nach
+  [ADR-0069](adr/0069-shared-mcp-connection-per-server.md): der Connection-Service **besitzt** den
+  `McpService` (`connect()` genau einmal, einziger Schließer), alle Registries adoptieren ihn
+  (`ToolService.adoptMcpGroup`); `disconnectMcp` detacht nur noch. Gilt für Codegraph **und**
+  User-MCP; der Leer-Pfad (Server-Liste wird leer) schließt ebenfalls, Status sagt jetzt ehrlich
+  „MCP disconnected (no servers configured)". Gates: Core 1175/0, OSGi 386/0. Offen bleibt nur der
+  `McpService.connect()`-Rollback im Core als testlos (siehe unten).
+- ❓ **`codegraph` fehlt in Pauls Tool-Auswahl** (Agent-Tool-Config), obwohl verbunden
+  (`Running MCP: codegraph_explore`). Kein struktureller MCP-Ausschluss (`ToolService.activeNames:111`,
+  `getToolStatus:465-467` enthalten MCP) — situativ: die Preview (`PeonAiService.java:568`) zeigt die
+  MCP-Menge des ToolService des jeweiligen Slot-Agenten × CSV-Filter; Codegraph ist nur auf
+  shared + po verbunden. Offen: **welcher Agent/Slot** in Pauls UI, und ob die Soll-Aussage aus
+  R-CG-6 („explizite CSV braucht ein `codegraph`-Token") dort überhaupt wählbar ist.
+- ❓ **`McpService.connect()`-Rollback ist testlos** (Da-Dok-Review 2026-10-18): schlägt bei User-MCP
+  Server #2 fehl, schließt der Owner den neuen Service nicht — die Leak-Freiheit hängt allein an
+  `McpService.connect()` (`:87-93`, all-or-nothing: alle Clients werden im catch geschlossen). Kein
+  Test pinnt das, und der Seam-Test kann es nicht (Fake überschreibt `connect()`). Testbar würde es
+  erst mit einem fabrizierbaren `McpClient`/Transport — dann ein Core-Test „2. Server scheitert →
+  Client 1 geschlossen, kein Handle offen". Aufwand vs. Wert: niedrig, aber bisher kein Fehlerfall
+  beobachtet. Prio: Backlog.
+- 🔒 **Chat-Feedback bei Connect/Disconnect — gelöst über das ContextItem (2026-10-18):** kein neuer
+  Emit-Pfad; `CodegraphContextItem.label()` (= `Codegraph connected|off|failed — <Projekt>`) fährt
+  den bestehenden `📋 Loading …`-Pfad (`AbstractAgent.renderTurnContext`). Siehe R-CG-7/R-CG-12.
+  Nebenbefund: die alte `UserContext.codegraphLine` + `CodegraphConnectionService.projectInfoLine()`
+  waren der zweite, verstreute Pfad — ersatzlos entfallen; die Tests dazu sind durch
+  `CodegraphContextItemTest` + das Wiring in `AgentContextComponentTest:153/:200` abgelöst.
+- 🔒 **Protokoll-Fallback ist kein Bug:** `Server does not support modern protocol, falling back to
+  legacy initialize` + `protocolVersion 2024-11-05` = normaler Auto-Detect-Pfad
+  ([ADR-0045](adr/0045-mcp-protocol-version-auto-detect.md), `DefaultMcpClient.java:291`,
+  log.debug); codegraph 1.6.0 spricht nur legacy.
+- 🔒 **Icon (2026-10-18 erledigt):** 32 ohne `viewBox` → auf 24×24 + `viewBox="0 0 32 32"`
+  normalisiert; `codegraph_off.svg`/`codegraph_off_dark.svg` ergänzt (gedimmte Farbe statt
+  `setEnabled(false)` — SWT graut Text, nicht das Image); R-CG-8 präzisiert.
+
+
+
+## ⏳ Nachtzyklus 5 (2026-10-16) — Token-Schätzung chars×2/7 → chars/3
+- **Punkt:** Estimator `ChatMessageUtil.charsToTokens` (chars×2/7 ≈ /3.5) unterschätzt systematisch
+  (~110k statt ~120k gemessen). Paul-Idee: /3. Jon: **umgesetzt** — R1 in token-usage.md sagt
+  ohnehin schon „chars / 3", der Code war die Abweichung; zu niedrige Schätzung ist für die
+  Kontext-Anzeige (Compact-Button used/max) die gefährliche Richtung (Overflow-Risiko), zu hoch nur kosmetisch.
+- **Rückversicherung:** Paul hat /3 vorgeschlagen („nicht so wichtig, mehr Info") — Umsetzung im
+  Nachtzyklus autonom; widerspricht Paul, zurück auf ×2/7 (Änderung ist eine Konstante). **Umgesetzt
+  `fbe2866f` + Zentralisierung `tokensToChars` `3199f732` (Open-Q1).**

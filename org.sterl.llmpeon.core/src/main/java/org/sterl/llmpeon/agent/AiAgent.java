@@ -36,7 +36,7 @@ public interface AiAgent {
     ThreadSafeMemory getMemory();
     
     int tokenContextUsedInPercent();
-    
+
     /**
      * Clear the current state
      */
@@ -112,6 +112,14 @@ public interface AiAgent {
      */
     default boolean queueMessage(String msg) {
         return false;
+    }
+
+    /**
+     * Inject a user message directly into the agent's memory while it is working
+     * (queued-user-messages rule 8 override): the running turn sees it on its next model
+     * call. Bypasses the queue entirely — no queued entry, no follow-up turn. Default no-op.
+     */
+    default void injectUserMessage(String text) {
     }
 
     /** @return the number of queued messages waiting to be processed. Default 0 for agents without queues. */

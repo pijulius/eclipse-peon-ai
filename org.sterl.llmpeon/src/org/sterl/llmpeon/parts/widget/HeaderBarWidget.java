@@ -6,6 +6,7 @@ import java.util.function.Supplier;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
@@ -14,6 +15,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.sterl.llmpeon.agent.NamedAgent;
+import org.sterl.llmpeon.parts.ai.CodegraphConnectionService;
 import org.sterl.llmpeon.parts.ai.PeonAiService.ToolStatus;
 import org.sterl.llmpeon.parts.shared.EclipseUiUtil;
 import org.sterl.llmpeon.parts.shared.ImageUtil;
@@ -37,6 +39,10 @@ public class HeaderBarWidget extends Composite {
     private final Supplier<List<ToolStatus>> toolStatus;
     private final TokenHeaderWidget tokens;
     private final AiAgentStatusWidget roster;
+    private final Label codegraph;
+    private final Image codegraphOn;    // ON, theme variant of codegraph.svg — preloaded, no leak on state change
+    private final Image codegraphOff;   // OFF, dimmed color variant (R-CG-8) — setEnabled(false) does not dim images
+    private final Image codegraphError; // platform STOP icon (R-CG-8, Q2=(a))
     private volatile Menu toolsMenu; // disposed on next open / widget dispose to avoid a native resource leak
 
     public HeaderBarWidget(Composite parent, int style,
@@ -48,7 +54,7 @@ public class HeaderBarWidget extends Composite {
         super(parent, style);
         this.activeAgentName = activeAgentName;
         this.toolStatus = toolStatus;
-        GridLayout layout = new GridLayout(4, false);
+        GridLayout layout = new GridLayout(5, false);
         layout.marginHeight = 0;
         layout.marginWidth = 4;
         setLayout(layout);
@@ -70,6 +76,16 @@ public class HeaderBarWidget extends Composite {
         // FILL the middle column so the roster gets the remaining width between tokens and hammer.
         roster.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         roster.setData(WidgetCss.CSS_CLASS_NAME_KEY, EclipseUiUtil.CSS_CLASS_HEADER_BAR_WIDGET);
+
+        // Codegraph indicator (R-CG-8): non-clickable in v1, sits between the roster and the
+        // hammer. All state images are preloaded here — setCodegraphState only swaps references.
+        codegraph = new Label(this, SWT.NONE);
+        codegraph.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
+        codegraph.setData(WidgetCss.CSS_CLASS_NAME_KEY, EclipseUiUtil.CSS_CLASS_HEADER_BAR_WIDGET);
+        var dark = EclipseUiUtil.DARK_THEME_NAME.equals(EclipseUiUtil.resolveTheme());
+        codegraphOn = ImageUtil.loadImage(this, codegraphIcon(CodegraphConnectionService.Kind.CONNECTED, dark));
+        codegraphOff = ImageUtil.loadImage(this, codegraphIcon(CodegraphConnectionService.Kind.OFF, dark));
+        codegraphError = ImageUtil.loadImage(this, codegraphIcon(CodegraphConnectionService.Kind.ERROR, dark));
 
         Button hammer = SwtUtil.createIconButton(this,
                 ImageUtil.loadImage(this,
@@ -99,6 +115,35 @@ public class HeaderBarWidget extends Composite {
     /** Re-reads the agent roster (names, context sizes, active/working state). UI-thread only. */
     public void refreshRoster() {
         roster.refresh();
+    }
+
+    /**
+     * Renders the codegraph state (R-CG-8, Q2=(a)): CONNECTED = codegraph icon, OFF = the dimmed
+     * color variant (own SVG — SWT's {@code setEnabled(false)} greys text, not the image),
+     * ERROR = the platform STOP icon. Tooltip comes from the service-built
+     * {@link CodegraphConnectionService.State#tooltip()}. UI-thread only.
+     */
+    public void setCodegraphState(CodegraphConnectionService.State state) {
+        codegraph.setImage(switch (state.kind()) {
+            case ERROR -> codegraphError;
+            case OFF -> codegraphOff;
+            case CONNECTED -> codegraphOn;
+        });
+        codegraph.setToolTipText(state.tooltip());
+    }
+
+    /**
+     * R-CG-8: the codegraph header icon path per (state kind, dark theme) — ON/OFF own color
+     * variants (SWT's {@code setEnabled(false)} greys text only, not the image), ERROR stays the
+     * platform STOP icon. One mapping, one place: the constructor preloads all three via this,
+     * {@link #setCodegraphState} swaps the preloaded images.
+     */
+    static String codegraphIcon(CodegraphConnectionService.Kind kind, boolean darkTheme) {
+        return switch (kind) {
+            case ERROR -> ImageUtil.STOP;
+            case OFF -> darkTheme ? ImageUtil.CODEGRAPH_OFF_DARK : ImageUtil.CODEGRAPH_OFF;
+            case CONNECTED -> darkTheme ? ImageUtil.CODEGRAPH_DARK : ImageUtil.CODEGRAPH;
+        };
     }
 
     /**

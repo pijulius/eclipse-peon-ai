@@ -1,52 +1,52 @@
-# Session-Stand — 2026-10-16 (Zyklus abgeschlossen: Review-Fixes + Symbole S1/S2 + Paul-WIP-Merge)
+# Open Ends / Memory — Session-Zwischenstand
 
 > docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts im Chat.
 
-## Zyklus-Ergebnis (2026-10-16, Branch `story/agent-tool-config`)
+## Stand 2026-10-21 — final (Branch `story/workspace-nesting-2026-10-19`)
 
-1. **Externes Review getriagt:** stale Punkte (resolved-points-Zeile, no-IO-Assertion) waren schon
-   erledigt; connectServers-Package-Private-Befund faktisch falsch (Test in anderem Package); restliche
-   validen Punkte eingebaut.
-2. **Inc A ✅ `35146c40`** — R-ATC-10 ✅ Suffix-Wildcard einheitlich (`stripWildcard` Allow+Deny),
-   4 Tests + Mutation-Nachweis, Homepage 3 Sektionen + Review-Doc-Edits. Gates 1114/0 + 350/0.
-3. **Inc B ✅ `17d1763c`** — `ToolService.activeNames(classFilter, nameFilter)` als einzige
-   Preview-Quelle; AbstractAgent + SearchAgentTool delegieren; +2 Tests. Gates 1116/0 + 350/0.
-4. **Inc C ✅ `2ff69adb`** — Pauls DiskGrepTool-Fix abgesichert: 5 Tests (Red-Nachweis), C-EXT-Decision
-   (effectiveExtension), grepDirectory List. Gates 1121/0 + 350/0. **🔍 = Search/Grep damit gebaut.**
-5. **Eclipse-Path-Resolution (Paul-WIP):** SOLL = resolveInEclipse(path, Optional<IProject>) Reihenfolge
-   1) selektiertes Projekt 2) Workspace-Root 3) offene Projekte (+`src/`-Fallback); Miss-Disclosure
-   bewusst VERWORFEN („nicht überengineieren"); `volatile currentProject` = richtiger Thread-Safety-Fix.
-6. **Tool-Output-Symbole ✅ (icons.md, Paul entschieden 2026-10-16):**
-   - 🔍 Search/Grep — gebaut (`2ff69adb` Disk + Eclipse-Seite jetzt auch committed); Da Sniffa freigegeben.
-   - 📜 Read — **S1 ✅ `2209215e`** (nur diskReadFile+eclipseReadFile, rot-erst, Hunk-Staging).
-   - 🗜 Compact — **S2 ✅ `e216f00d`** (`TOOL_MESSAGE_PREFIX`-Konstante, Start/Skip/Fail/Result-Zeilen
-     + AbstractAgent:373; AIChatView TABU-frei via Konstante). Gates 1126/0 + PDE 351/0.
-   - Da-Dok-Review: **ACCEPTED**. Präexistenter 🗜 in ToolService.java:246 (R-CC) als „präexistent" notiert.
-   - **S3 ❌ offen, JETZT UNBLOCKED:** 🗜 auch in PoDelegateTool:188-200 (3 Branches) + AgentsTool:296-300;
-     PoDelegateTest:256 anpassen.
-7. **Docs-Flips + Hausarbeiten (alle pushed):** sub-agent-timing.md 🗜-Format, index.md Z.61 „✅ gebaut",
-   icons.md komplett (`97cca6a3`); Plan archiviert `2cf725db` (`overview-done-2026-10-16-16-45.md`);
-   resolve-WIP-Note + skill-impact-Ledger `483a33c3`; AGENTS-Working-Agreement `3b6a10e8`
-   („Docs, die WIP beschreiben, werden trotzdem committed").
-8. **Paul-WIP übernommen ✅ `af658e0f`** (Paul freigegeben, Jon gegen IST geprüft, Gate grün:
-   Plugin-Compile 0 Errors, Surefire 1126/0): resolveInEclipse-Overload (SOLL-konform), volatile
-   currentProject (Grep/Read/Write), 🔍-Präfix EclipseGrepTool:88, PoDelegateTool:253 Space-Fix,
-   ChatMarkdownWidget Import-Sortierung. **Nur die 2 untracked Verzeichnisse (`agent/model/`,
-   `agent/tools/`) bleiben draußen** — Paul: „nur die neuen files nicht".
+- **Branch fertig, Review/Smoke ausstehend (Paul).** Alle Cleanup-Commits ab `2634140f`
+  liegen nur lokal — origin steht bei `89aafcb` (Pauls Sync ~08:13); alles danach ist
+  **unpushed** (aktuelle Zahl: `git rev-list --count origin/story/workspace-nesting-2026-10-19..HEAD`).
+  Paul macht das finale Review lokal.
+  Inhalt: Housekeeping (6 Skills + AGENTS-Straffung `35c5219f`) · Prompt-Trims po/planner (`ce3beb93`)
+  · Restore (`440304c7`) · Release-Doku-Auflösung (`636f5e26`, ADR-0072) · Docs-Cleanup
+  (`89aafcb`) · Externe-Review-Fixes + finaler Docs-Cleanup (`2634140f`, `b888f25d`, `d60b00a1`).
+- **Zyklus vollständig abgeschlossen:** resolved-points-Links gefixt, Skill `peon-release`
+  (Build-Guard, Update-Site = `https://sterlp.github.io/eclipse-peon-ai/`), Homepage-Install-URLs,
+  compressor.md Disclosure-Rewording (Paul „passt"), lintDocs über docs/: 0 findings.
+- **Nach Pauls Review/Smoke:** Merge/Tag 2.14.1 (siehe Offen für Paul) + Push.
 
-## Offen (für Paul / nächste Zyklen)
-- **UNBLOCKED, Umsetzung offen:** S3 (🗜 in PoDelegateTool/AgentsTool) + EclipseGrepTool
-  IFile-Disclosure-Fix (C-EXT-Pendant, open-points) — beide warten nur noch auf Freigabe als Arbeit.
-- ❓ `PeonAiService.current()`-Umbau (Supplier/DI) — open-points, Entscheidung offen (Paul).
-- Merge → main + Release-Notes + Paul-Smoke (R-AEM/R-TD-5) = Paul.
-- Lint: testRoots muss BEIDE Bäume scannen (core + `org.sterl.llmpeon.test/src`); docRoots = DIRECTORY
-  `["docs"]`, root = Disk-Pfad.
+## Offen für Paul (Details: [open-points.md](open-points.md))
+
+1. ❓ **Merge/Tag 2.14.1** — `story/workspace-nesting-2026-10-19` lokal fertig (Core 1231/0,
+   OSGi 399/0); vorher `mvn -B clean verify`. Smokes: Dev/Plan/Review gleicher Prozentsatz ·
+   Delegation-Compact > 70 % vor Auftrag · Monorepo · Codegraph nach Neustart.
+2. ⏳ **Delegations-Compact feuert pro Delegation** (Kosten, ADR-0071) — Faktor anheben oder nur
+   bei Themenwechsel? Rückversicherung steht aus.
+3. ⏳ **Compact-Briefing-Schema** für `compressor.md`: 3 Ergänzungen vorgeschlagen (STANDING-RULES-Slot,
+   preserve-Pfade erweitern, memory.md = complement-not-replace) — Freigabe steht aus.
+4. ❓ Fixture-Duplikat in ≥3 core-Testklassen · ❓ R-Regeln ohne Linter-Gate (`DocsLinter:241/254`)
+   · ❓ In-Loop-Direkt-Compact fängt Exceptions nicht (R-CC-20.5-Nachbarloch) · ⏳ Reserved-Name
+   `codegraph` · ⏳ R-CG-15 Monorepo-State-Refresh · ⏳ R-CC-19-Semantik+Tilde · ⏳ Windows-
+   `cmd /c`-Fallback · 🔒 S3 (🗜 in PoDelegateTool) blockiert auf Pauls WIP-Merge.
+
+## Backlog (nächste Session)
+
+- **Async-Shell-Tool — Paul-Prio** (wichtiger als async Agents). Danach async Agents (Top-3 in
+  [async-agents.md](async-agents.md)).
+- **TempFileTool** — Slice 2 Output-Trim 🚧 in design.
+- R-CG-14 (Generation + `disposed` statt Lock) · R-CIB-4 Stufe 2 · R-CC-7 Fehlerklassen-Tabelle
+  ApiRetry (❓) · Header-State-Leak (❓) · Context-Overflow-Zyklus (❓) · McpService
+  `connect()`-Rollback-Test (ADR-0069).
 
 ## Notizen
-- eclipseEditFile verliert param oldString intermittierend; eclipseReplaceLines acted-as-insert 6×
-  heute (L6-Leftover, 🔍-Row, L99-Fragment, Z.64-Duplikat, open-points-L179-Duplikat) → IMMER
-  re-read nach line-based Edit; strukturierte Mehrfach-Edits als Ganzdatei-Write.
-- Paul arbeitet parallel im selben Tree — selektives git add; Gate-Blocker durch fremdes WIP →
-  STOP-AND-ASK.
-- Vorheriger Stand (Night-Cycle 4, 2026-10-15): abgeschlossen, alles gepusht; Offen-Punkte in
-  open-points.md „Night-Cycle 4 — Nachbefunde".
+
+- **System-Prompts generisch halten** (Paul 2026-10-20): nichts Repo-Spezifisches, minimale
+  Änderungen, keine Docs-Inhalte — nur Verweise; Best Practice für alle Projekte (ABAB, C++, Java …).
+- **Untracked, NICHT committen:** Pauls WIP (`org.sterl.llmpeon.core/…/agent/tools/**`,
+  `bad-context-codegraph.md`, `peon-plan/`); `non-peon-ai-agents-md/` veraltet — Paul löscht selbst.
+- **Tool-Trap:** `diskRenameResource` kann Erfolg melden ohne zu verschieben — nach Renames immer
+  mit `diskListDirectory`/`diskSearchFiles` verifizieren.
+- **Windows-Falle im Renderer:** in `lineSeparator()`-Strings immer `indexOf('\n')` suchen.
+- **UserMessage-Join in `ThreadSafeMemory.add`:** Seed-Fixtures ggf. `AiMessage` als Trenner.
+- **Surefire-Ground-Truth + Commit-Hash aktiv einfordern** — DONE-Claims gegen den IST prüfen.

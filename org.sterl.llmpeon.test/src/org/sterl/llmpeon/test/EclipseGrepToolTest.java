@@ -14,6 +14,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.eclipse.core.resources.IContainer;
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.NullProgressMonitor;
@@ -21,6 +22,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.sterl.llmpeon.parts.tools.EclipseGrepTool;
+import org.sterl.llmpeon.tool.AiReponseBuilder;
 
 public class EclipseGrepToolTest extends AbstractIntegrationTest {
 
@@ -63,6 +65,19 @@ public class EclipseGrepToolTest extends AbstractIntegrationTest {
         } finally {
             super.after();
         }
+    }
+
+    private NestedProjectFixture nested;
+
+    @Before
+    public void createNestedFixture() {
+        nested = new NestedProjectFixture();
+        nested.create();
+    }
+
+    @After
+    public void destroyNestedFixture() {
+        if (nested != null) nested.destroy();
     }
 
     @Test
@@ -149,6 +164,7 @@ public class EclipseGrepToolTest extends AbstractIntegrationTest {
         hitLines.forEach(l -> assertTrue("hit must contain the query:\n" + l, l.contains("einem text")));
     }
 
+    // BDD-6 (docs/output-trim-service.md): minified hit -> 500-char cap on the full rendered line
     @Test
     public void longLineIsClampedAndDisclosed() {
         // GIVEN one .md file with a single 20013-char line containing the query (minified)
@@ -157,13 +173,14 @@ public class EclipseGrepToolTest extends AbstractIntegrationTest {
         // WHEN grepping the query with the .md type filter
         String result = tool.eclipseGrepFiles("minifiedline", PeonTestFixture.PROJECT_NAME, ".md");
 
-        // THEN the hit line is clamped to exactly 2000 chars of text (13-char token + 1987 'a', nothing more)
+        // THEN the FULL rendered hit line (path + ":1: " + text) is capped at 500 chars + cut marker
         var hitLines = result.lines().filter(l -> l.contains("grepminified.md:1: ")).toList();
         assertEquals("exactly one hit line expected:\n" + result, 1, hitLines.size());
-        assertTrue("hit line must end with exactly the clamped 2000 chars:\n" + hitLines.get(0),
-                hitLines.get(0).matches(".*grepminified\\.md:1: minifiedline a{1987}$"));
+        String hit = hitLines.get(0);
+        assertTrue("cap marker must start at char 500 (line = 500 + marker):\n" + hit,
+                hit.substring(500).matches("…\\(\\+\\d+ chars\\)"));
         // ... and the clamp is honestly disclosed (family consistency with the disk tool)
-        assertContains(result, "1 line(s) truncated at 2000 chars");
+        assertContains(result, "1 line(s) truncated at 500 chars");
     }
 
     @Test
@@ -286,6 +303,138 @@ public class EclipseGrepToolTest extends AbstractIntegrationTest {
 
         assertContains(result, "no matches");
         assertContains(result, "File type filter: known text extensions and filenames only.");
+    }
+
+    // UC-OD-10
+    // R-OD-7 (docs/tool-output-disclosure.md): an explicit file target is never extension-filtered,
+    // so the disclosure must not claim a filter that did not happen (C-EXT, disk-side counterpart:
+    // DiskGrepToolTest.fileTargetBeatsExtensionFilter)
+    @Test
+    public void fileTargetBeatsExtensionFilterInDisclosure() {
+        var messages = new ArrayList<String>();
+        var capturingTool = new EclipseGrepTool() {
+            @Override
+            protected void onTool(String m) {
+                messages.add(m);
+            }
+        };
+
+        // GIVEN the fixture's GrepTarget.java — an explicit file target beats the extension filter
+        // WHEN grepped via the file path with an extension that would exclude it in a container walk
+        String result = capturingTool.eclipseGrepFiles("grepMe",
+                "/" + PeonTestFixture.PROJECT_NAME + "/src/org/sterl/fixture/GrepTarget.java", ".xml");
+
+        // THEN all matches of the file come through — no extension filter was applied ...
+        assertContains(result, "GrepTarget.java:4:     String first = \"grepMe\"");
+        assertContains(result, "GrepTarget.java:5:     String second = \"grepMe\"");
+        assertContains(result, "GrepTarget.java:6:     String third = \"grepMe\"");
+        // ... and the disclosure names NO extension — nothing was filtered (C-EXT)
+        assertContains(messages.get(0), "type '*'");
+        assertFalse("file target disclosure must not claim the .xml filter:\n" + messages.get(0),
+                messages.get(0).contains("type '.xml'"));
+
+        // AND no-match case with the extension: the standard no-extension filter hint is shown —
+        // the hint must not be suppressed by a filter that never happened on a file target (C-EXT)
+        String empty = capturingTool.eclipseGrepFiles("zzz-does-not-exist",
+                "/" + PeonTestFixture.PROJECT_NAME + "/src/org/sterl/fixture/GrepTarget.java", ".xml");
+        assertContains(empty, "no matches");
+        assertContains(empty, "File type filter: known text extensions and filenames only.");
+
+        // WHEN the same query targets the project (container walk) with the .java filter
+        messages.clear();
+        String scoped = capturingTool.eclipseGrepFiles("grepMe", PeonTestFixture.PROJECT_NAME, ".java");
+
+        // THEN the disclosure names the extension like today (unchanged)
+        assertContains(scoped, "GrepTarget.java");
+        assertContains(messages.get(0), "type '.java'");
+    }
+
+    // R-WN-1
+    // R-WN-2
+    @Test
+    public void nestedFileHitsOnceUnderMostSpecificPath() {
+        // GIVEN - one Disk file visible under three nested projects, three marker lines each
+        // WHEN - workspace-wide grep for the marker
+        String result = tool.eclipseGrepFiles(NestedProjectFixture.MARKER, null, ".java");
+
+        // THEN - the three hits appear exactly once, all under the deepest project
+        var leafHits = result.lines().filter(l -> l.startsWith(leafViewPrefix())).toList();
+        assertEquals("Expected exactly the 3 nested marker hits under the leaf project:\n" + result,
+                3, leafHits.size());
+        // ... and no hit under any shallower view of the same Disk file
+        var shallowerHits = result.lines()
+                .filter(l -> l.startsWith(rootViewPrefix()) || l.startsWith(midViewPrefix())).toList();
+        assertTrue("No hit may carry a shallower view of the same Disk file:\n" + shallowerHits,
+                shallowerHits.isEmpty());
+    }
+
+    // R-WN-2
+    @Test
+    public void nestedFileCountsOnceAgainstFileCap() throws Exception {
+        // GIVEN - 97 filler files with one marker line each in the nesting root (root view only):
+        // 97 + 1 Disk file = 98 files, 97 + 3 = 100 lines — exactly at the line cap
+        var created = new ArrayList<IFile>();
+        try {
+            for (int i = 0; i < 97; i++) {
+                var filler = nested.root().getFile(String.format("WnFiller%03d.java", i));
+                filler.create(new ByteArrayInputStream(
+                        String.format("public class WnFiller%03d { // %s }", i, NestedProjectFixture.MARKER)
+                                .getBytes(StandardCharsets.UTF_8)), true, new NullProgressMonitor());
+                created.add(filler);
+            }
+
+            // WHEN - workspace-wide grep for the marker
+            String result = tool.eclipseGrepFiles(NestedProjectFixture.MARKER, null, ".java");
+
+            // THEN - the nested file counts once: 98 files stay under the file cap
+            assertFalse("98 distinct Disk files must not trigger the file cap:\n" + result,
+                    result.contains("result capped at " + AiReponseBuilder.MAX_GREP_FILES + " files"));
+            // ... its 3 hits are under the deepest project ...
+            var leafHits = result.lines().filter(l -> l.startsWith(leafViewPrefix())).toList();
+            assertEquals("Expected exactly the 3 nested marker hits under the leaf project:\n" + result,
+                    3, leafHits.size());
+            // ... and exactly 100 hit lines: at the line cap nothing was cropped, no disclosure
+            var hitLines = result.lines().filter(l -> l.matches(".*\\.java:\\d+: .*")).toList();
+            assertEquals("Expected exactly 100 hit lines (97 fillers + 3 nested):\n" + result,
+                    100, hitLines.size());
+            assertFalse("exactly at the line cap nothing was cropped — no disclosure:\n" + result,
+                    result.contains("matched lines — narrow your search"));
+        } finally {
+            for (var filler : created) {
+                if (filler.exists()) filler.delete(true, new NullProgressMonitor());
+            }
+        }
+    }
+
+    // R-WN-1
+    @Test
+    public void explicitPathScopeStaysAuthoritative() {
+        // Regressionsschutz (D6): an explicit scope stays authoritative — green pre-fix
+        // WHEN - grep scoped to the nesting root
+        String result = tool.eclipseGrepFiles(
+                NestedProjectFixture.MARKER, NestedProjectFixture.ROOT_NAME, ".java");
+
+        // THEN - the 3 hits under the searched root view, no re-translation to a deeper view
+        var rootHits = result.lines().filter(l -> l.startsWith(rootViewPrefix())).toList();
+        assertEquals("Expected the 3 nested marker hits under the explicit root scope:\n" + result,
+                3, rootHits.size());
+        var deeperHits = result.lines()
+                .filter(l -> l.startsWith(midViewPrefix()) || l.startsWith(leafViewPrefix())).toList();
+        assertTrue("No re-translation to a deeper view:\n" + deeperHits, deeperHits.isEmpty());
+    }
+
+    private static String rootViewPrefix() {
+        return "/" + NestedProjectFixture.ROOT_NAME + "/" + NestedProjectFixture.MID_NAME + "/"
+                + NestedProjectFixture.LEAF_NAME + "/" + NestedProjectFixture.MARKER_FILE + ":";
+    }
+
+    private static String midViewPrefix() {
+        return "/" + NestedProjectFixture.MID_NAME + "/" + NestedProjectFixture.LEAF_NAME
+                + "/" + NestedProjectFixture.MARKER_FILE + ":";
+    }
+
+    private static String leafViewPrefix() {
+        return "/" + NestedProjectFixture.LEAF_NAME + "/" + NestedProjectFixture.MARKER_FILE + ":";
     }
 
     private static int firstIndexContaining(List<String> lines, String value) {

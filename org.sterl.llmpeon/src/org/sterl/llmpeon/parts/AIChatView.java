@@ -37,6 +37,7 @@ import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.command.SlashCommandResolver;
 import org.sterl.llmpeon.command.SlashCommandResolver.SlashResult;
+import org.sterl.llmpeon.queuedmessages.OverrideMessageResolver;
 import org.sterl.llmpeon.context.SimpleContextItem;
 import org.sterl.llmpeon.exception.ExceptionUtil;
 import org.sterl.llmpeon.memory.AgentErrorMemory;
@@ -188,13 +189,17 @@ public class AIChatView implements EclipseAiMonitor {
             this::onSkillMenuSelection
         );
 
-        headerBar = new HeaderBarWidget(footerBlock, SWT.PUSH,
+        headerBar = new HeaderBarWidget(footerBlock, SWT.NONE,
                 () -> aiService.getActiveAgent().getName(),
                 aiService::getToolStatus,
                 aiService::getStatusAgents,
                 this::doCompressAgent,
                 () -> inFlightTurns.get() > 0);
         headerBar.setLayoutData(new RowData());
+        // R-CG-8: the service fires from its Job thread — hop to the UI thread, then render.
+        aiService.setCodegraphStateListener(state -> EclipseUtil.runInUiThread(parent,
+                () -> headerBar.setCodegraphState(state)));
+        headerBar.setCodegraphState(aiService.getCodegraphConnectionService().state());
 
         applyConfig();
         refreshChat();
@@ -259,11 +264,10 @@ public class AIChatView implements EclipseAiMonitor {
     private void applyTextSelection(ITextSelection ts) {
         var uc = aiService.getUserContext();
         boolean changed = false;
-        if (parent != null && !parent.isDisposed()) {
-            // R-SEL-2: open file = known resource (UI-thread path of EclipseUtil.getOpenFile)
-            changed |= uc.setSelectedResource(EclipseUtil.getOpenFile().orElse(null));
-        }
-        changed |= uc.setTextSelection(ts);   // nachher: Resource-Wechsel hat alte Selektion bereits geräumt
+        if (parent == null || parent.isDisposed()) return;
+        // R-SEL-2: open file = known resource (UI-thread path of EclipseUtil.getOpenFile)
+        changed |= uc.setSelectedResource(EclipseUtil.getOpenFile().orElse(null));
+        changed |= uc.setTextSelection(ts); 
         if (changed) EclipseUtil.runInUiThread(parent, this::refreshStatusLine);
     }
 
@@ -577,6 +581,20 @@ public class AIChatView implements EclipseAiMonitor {
     }
 
     private SendDecision resolveOutgoingMessage(String text, AiAgent active) {
+        // Rule 8 override: while the agent works, a leading ! bypasses the queue — the text
+        // goes straight into the agent's memory; a lone ! (blank) is a silent no-op.
+        var override = new OverrideMessageResolver().resolve(text, active.isWorking(),
+                aiService.getCommandService(), aiService.getSkillService());
+        if (override.isPresent()) {
+            var injected = override.get().text();
+            if (StringUtil.hasValue(injected)) {
+                active.injectUserMessage(injected);
+                chatHistory.appendMessage(new SimpleMessage(Type.USER, injected));
+            }
+            chatInput.clearText();
+            chatInput.dismissSlashMenu();
+            return new SendDecision.Skip();
+        }
         var resolver = new SlashCommandResolver();
         var result = resolver.resolve(text, aiService.getCommandService(), aiService.getSkillService());
 

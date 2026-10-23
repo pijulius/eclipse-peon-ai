@@ -1,6 +1,29 @@
+
+
 # Resolved Points
 
 Geklärte Punkte, die in kein Feature-Doc passen. Offene Punkte: [open-points.md](open-points.md).
+
+## SLF4J Multiple Providers — gelöst (Paul gemeldet 2026-10-17, Fix `8e6bcb54`)
+
+**Punkt:** `SLF4J(W): Class path contains multiple SLF4J providers` — `EclipseSlf4jProvider`
+gewinnt, aber slf4j-simple (2.0.19) ist als zweiter Provider resolved (direkte Plugin-pom-
+Dependency → `copy-dependencies` → `lib/` → Bundle-ClassPath → ServiceLoader sieht beide).
+**Entscheidung:** slf4j-simple komplett raus (pom + MANIFEST + build.properties + Disk) —
+nur noch unser Provider; Plugin-Suite 352/0 ohne Warnung, Fix-Nachweis strukturell (exakt eine
+Provider-Registrierung im gebauten Bundle). **Pauls Annahme korrigiert:** es gibt kein
+`Require-Bundle org.slf4j.api`-Range `[2.0.0,3.0.0[` (VOLL-Grep: 0 Treffer) — slf4j-api kommt
+aus dem gebündelten `lib/`-Jar, Range-Schärfung entfällt. Falls OSGi-Resolve von slf4j-api
+gewünscht: eigene Story (open-points.md ⏳).
+
+## Alias-Path — verworfen (Paul 2026-10-17)
+
+**Punkt:** LLM setzt immer wieder den Eclipse-Project-Path als Disk-Path — Bedarf für ein
+„alias path"-Feature (Tools akzeptieren beide Pfade)?
+**Entscheidung:** Verworfen. Pfad-Dialekte bleiben familien-spezifisch (`disk*` ↔ `eclipse*`,
+bewusste Trennung — Kollisionsargument `docs`/`tmp`-Projekte); nur ein Satz als Note in
+[shell-tool.md](shell-tool.md) Notes. Der Befund soll durch klare Pfad-Angaben in der
+Projekt-Info (und künftig R-CG-7) abgestellt werden.
 
 | Punkt | Entscheidung | Begründung | Datum |
 |---|---|---|---|
@@ -79,7 +102,7 @@ Mapping-Datei (feature-change-request-copilot.md) wurden aufgelöst. Verbleibend
 | LM Studio Off-Tokens | **Jon (autonom)** — alle Off-Tokens → `reasoning=off`, generic-on → `reasoning=on` (vorher: nur `"false"`, Rest verbatim) | Konsistenz mit Ollama-Regel; Verhaltensänderung dokumentiert | 2026-09-27 |
 | Rot-erst-Strategie bei UI-Kollaps-Bug | **Jon (autonom)** — Inc-1: grüner Roundtrip-Schutz + gepinnter IST-Kollaps-Test; Inc-2: echter Umschalt-Regressor (`issue149_falseSurvivesUiEncodeAndPersistence`) | Kollaps liegt in UI-Kodierung, Saver/Loader waren korrekt — „je Inkrement grün" hält | 2026-09-27 |
 | Provider-Think-Audit-Befunde B1–B5 | **Jon (autonom)** — B1 Copilot `returnThinking(true)` gefixt (echter Bug, Parität zu OpenAI); B2/B3 toter Alt-Semantik-Code (`toOnOff`/`toBoolean`/`resolveOff`) gelöscht; B4/B5 Javadocs auf ADR-0059; B6 E2E-Legacy-`false` ergänzt | Da-Dok-Audit, CONCERNS; alles in Inc-4 (`4a7bbc84`/`f4a80592`) | 2026-09-27 |
-| Issue #142 — Eclipse-Installationsfehler (asm-Konflikt) | **Gefixt** (2026-10-06, `2968ede2` auf main): `includeAllDependencies` entfernt — p2-Repo liefert nur noch Feature+Plugin; `jakarta.annotation` auf `[2.0.0,4.0.0)`, Target/Compatibility-Floor 2025-12; Recovery-Guide + `clear-stale-platform-bundles.ps1` | Unser p2-Repo schleppte Platform-Bundles (asm 9.10.1) mit und brickte Eclipse 2026-03 (uses-constraint-Konflikt, Workbench tot). Details: [issue-142-asm-conflict.md](issue-142-asm-conflict.md) + [ADR-0044-Addendum](adr/0044-target-2026-09-dependency-update.md) + [troubleshooting-stale-platform-bundles.md](troubleshooting-stale-platform-bundles.md) | 2026-10-06 |
+| Issue #142 — Eclipse-Installationsfehler (asm-Konflikt) | **Gefixt** (2026-10-06, `2968ede2` auf main): `includeAllDependencies` entfernt — p2-Repo liefert nur noch Feature+Plugin; `jakarta.annotation` auf `[2.0.0,4.0.0)`, Target/Compatibility-Floor 2025-12; Recovery-Guide: [Homepage Troubleshooting](https://peon-ai-4e.sterl.org/setup/troubleshooting) + `scripts/clear-stale-platform-bundles.ps1` | Unser p2-Repo schleppte Platform-Bundles (asm 9.10.1) mit und brickte Eclipse 2026-03 (uses-constraint-Konflikt, Workbench tot). Details: [issues/issue-142-asm-conflict.md](../issues/issue-142-asm-conflict.md) + [ADR-0044-Addendum](adr/0044-target-2026-09-dependency-update.md) + [Homepage Troubleshooting](https://peon-ai-4e.sterl.org/setup/troubleshooting) | 2026-10-06 |
 | API-Fehler ins Agent-Memory (Paul-Wunsch) | **Gebaut** (✅, `53e54c5e`) — eigenes Feature-Doc [agent-error-memory.md](agent-error-memory.md); Rest: Paul-Smoke AiChatView-Wiring | Terminale Fehler nach erschöpftem ApiRetry (nie Cancel) landen als kompakte `e.getMessage()` (Dedup 1×) im Agent-Memory; Einfügepunkt AiChatView-catch — der Agent sieht den Abbruch und kann reagieren | 2026-09-30 |
 
 | Branch `release-2026-09-06` (3 Release-Commits, nie direkt gemerged) | **Erledigt** — Branch existiert nicht mehr (dangling); Inhalte aller 3 Commits verifiziert in main: Dropdown-Deletion (4 Klassen weg, `a1d8d35`), Charset-Guard-Test (`EclipseWorkspaceWriteFileToolTest:110`), Skipped-Report (`EclipseRunTestTool:221/328`) | Feature-Commits gingen via eigene PRs, Release-Commits einzeln nach main übernommen — nur Commit-Geschichte fehlt, inhaltlich nichts. Verifikation 2026-10-13 (Da Mek, merge-base + git cherry + Inhalts-Stichprobe) | 2026-10-13 |
@@ -95,5 +118,5 @@ Mapping-Datei (feature-change-request-copilot.md) wurden aufgelöst. Verbleibend
 | R-SEL-4 Umsetzungsdetails | **🔒 alle drei bestätigt:** jede `setTextSelection` (auch leer) räumt den Typ; Rename `clazz`/`setClassFile` → `javaType`/`setJavaType`; Typ-Event berührt `currentProject` nicht | Kein Verhaltens-Widerspruch; UC-SEL-4-Tests bleiben | 2026-10-14 |
 | CIB-Doc-Split (`compact-input-budget.md`) | **🔒 Paul:** Split okay statt Umnummerierung | Löst die 6× `PRAEFIX_FREMD` im Compact-Doc; IDs + ~35 Code-Kommentar-Referenzen unangetastet | 2026-10-14 |
 | User-Smoke Issue #149 (Think) | **✅ 2026-09-30** (gemeinsamer Smoke aller Zyklen) | Ollama-Dropdown (""/true/false), Basis-Checkbox weg, `think:false` im Debug-Log, Custom-Agent Legacy-Frontmatter bestätigt | 2026-09-30 |
-| Unbegrenzte Query-Caches | **Belassen** — `SearchQuery.CACHE` + `RegexUtils.GLOB_CACHE` unbegrenzt; LRU 500 nur bei Bedarf | Einträge winzig; Rückversicherung 2026-10-14 abgeschlossen | 2026-10-14 |
+| Unbegrenzte Query-Caches | **Überholt 2026-10-17 (Paul specified):** [bounded-caches.md](bounded-caches.md) — `SearchQuery.CACHE` + `RegexUtils.GLOB_CACHE` auf geteilten `BoundedLruCache` (Cap 128), `WebFetchTool` echtes LRU | 2026-10-14 Rückversicherung „Einträge winzig" galt, bis der Cache-Audit (Nachtzyklus 5) LLM-kontrollierte Keys als echtes Leak einstufte | 2026-10-14 → 2026-10-17 |
 | Compressor-Dedup-Subtext-Edge / ThreadSafeMemory RAM-only | **Keine Aktion** — Dedup ist lossy (Compact akzeptiert), RAM-only nach Persist-IOException präexistierend | Keine Blocker; Revisit nur bei Beschwerden/Datenverlust-Meldungen | 2026-10-14 |

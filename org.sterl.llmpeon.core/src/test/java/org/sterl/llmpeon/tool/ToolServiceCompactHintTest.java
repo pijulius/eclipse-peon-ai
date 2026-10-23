@@ -152,11 +152,15 @@ class ToolServiceCompactHintTest {
         // WHEN — a tool round crossing the hint threshold
         new ToolService().executeLoop(req);
 
-        // THEN — the hint LOG line carries the diagnosis: memory exact (153000), model = same provider input
+        // THEN — the hint LOG line carries the diagnosis: memory = provider input (153000) + appended
+        // estimate (R-CC-19 → estimate=true), model = same provider input
         assertThat(hints).hasSize(1);
+        var matcher = java.util.regex.Pattern.compile("memory=(\\d+)").matcher(hints.getFirst());
+        assertThat(matcher.find()).isTrue();
+        assertThat(Integer.parseInt(matcher.group(1))).isGreaterThan(153000);
         assertThat(hints.getFirst())
-                .contains("memory=153000(estimate=false)")
                 .contains("model=153000")
+                .contains("(estimate=true)")
                 .contains(" estimate=");
     }
 
@@ -165,7 +169,9 @@ class ToolServiceCompactHintTest {
     @Timeout(10)
     void hintLineShowsMemoryDivergingFromModel() {
         // GIVEN — round 1 reports input 80211; round 2 grows the context with big messages and reports NO
-        // usage, so the counter becomes an estimate that drifts far above the (unchanged) model value
+        // usage, so the counter becomes an estimate that drifts far above the (unchanged) model value.
+        // Per-test budget 210000 (R-CC-18): round 2's estimate (≈200k) must land in the HINT band
+        // (199500 < est ≤ 210000), not over budget — over budget the gate compacts directly.
         var memory = seedMemory(new ThreadSafeMemory(), 10);
         var rounds = new AtomicInteger();
         var cm = new StreamMock().buildMock(r -> switch (rounds.incrementAndGet()) {
@@ -180,7 +186,8 @@ class ToolServiceCompactHintTest {
         var monitor = hintCapturingMonitor(hints);
         var req = ToolLoopRequest.builder()
                 .memory(memory)
-                .chatModel(new ConfiguredChatModel(hintConfig(), cm))
+                .chatModel(new ConfiguredChatModel(
+                        LlmConfig.builder().model("mock").autoCompactAfter(210000).build(), cm))
                 .monitor(monitor)
                 .agent(hintAgent())
                 .build();
@@ -261,6 +268,7 @@ class ToolServiceCompactHintTest {
         when(agent.getName()).thenReturn("Peon-Dev");
         return agent;
     }
+
 
     private static ThreadSafeMemory seedMemory(ThreadSafeMemory memory, int messages) {
         for (int i = 0; i < messages; i++) {

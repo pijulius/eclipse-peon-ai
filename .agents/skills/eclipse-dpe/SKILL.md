@@ -219,3 +219,24 @@ The daily "No files found for a file that exists" was never a wildcard problem:
   every hit); enabled state = public constant `IBreakpoint.ENABLED` (`org.eclipse.debug.core.enabled`) —
   there is no `IMarker.ATTR_ENABLED`. `IMarker.getAttribute(String, default)` overloads (int/String/boolean)
   do not throw; only the single-arg `getAttribute(String)` does.
+- **`Status` ctor semantics changed (verified 2026-10-19, R-CG-2 OSGi gate, Eclipse 2025-12 /
+  equinox.common 3.21.0):** `new Status(int, String, String, Throwable)` is now
+  (severity, pluginId, message, exception) and **always sets code = OK** — `getCode()` returns
+  0 even for `new Status(IStatus.ERROR, …)` (severity is intact; `toString()` shows
+  "Status ERROR: … code=0"). Assert `getSeverity()` (or `matches(ERROR)`), never `getCode()`,
+  on such statuses. A test pinning `getCode() == IStatus.ERROR` fails deterministically and
+  masquerades as stale bytecode.
+
+## E4 CSS theme pinning in PDE tests (verified 2026-10-17, test-rework)
+
+- **`IThemeEngine.DEFAULT_THEME_ID` is NOT a registered theme id** (2026-09 platform,
+  `org.eclipse.e4.ui.css.swt.theme` 0.15.200): the constant is
+  "org.eclipse.e4.ui.workbench.swt.theme.default"; registered ids are `e4_classic`, `e4_dark`,
+  `e4_default`. `setTheme(DEFAULT_THEME_ID, …)` is a no-op unless the light theme happens to be
+  active already — proven: after switching to `e4_dark`, the pin left the active theme `e4_dark`
+  and a CSS-styled widget rendered #1E1E1E instead of white (flaky `HeaderRosterStructureTest`).
+  Pin the registered id `"org.eclipse.e4.ui.css.theme.e4_default"` instead — the new
+  `ThemeEngine` (replaces `ThemeManager`) switches **synchronously on the UI thread** (no
+  ThemeJob). Then verify `getThemeEngine().getActiveTheme().getId()` and Assume-skip the CSS
+  assertions if the environment cannot make the light theme active (recovered workspaces can
+  start dark or without a registered theme).

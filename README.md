@@ -12,7 +12,7 @@ A lightweight, context-aware LLM assistant that integrates directly into your Ec
 
 ![Example](./homepage/src/assets/example.png)
 
-## Autonomus mode is back
+## Autonomous mode is back
 
 Jon and team are in the house. Single threaded for now - for best local performance.
 
@@ -24,6 +24,7 @@ Jon and team are in the house. Single threaded for now - for best local performa
 - **Voice Chat**: Talk to your AI peon and tell him what todo - no more typing
 - **File Operations** - Read, write, search, and modify files directly from the chat
 - **Context Awareness** - Understands your current workspace and selected files
+- **Codegraph** - Auto-connects the [codegraph](https://github.com/colbymchenry/codegraph) knowledge graph when the active project is indexed — one `codegraph_explore` call instead of search loops
 - **Local LLM Support** - Works with Ollama for privacy-focused local inference
 - **Multi-Provider** - Supports Ollama, OpenAI (and compatible), Google Gemini, Mistral AI, Anthropic Claude, and GitHub Copilot
 
@@ -95,8 +96,8 @@ Example workflows:
 - [x] **Search Files** - Find files by name across the workspace
 - [x] **Grep** - Full-text content search across all open projects
 - [x] **Build Project** - Trigger Eclipse builds and report errors/warnings
-- [x] **Run Tests** - Execute JUnit 5 tests and report failures with stack traces
-- [x] **Shell Command** - Run OS commands (git, mvn, npm, etc.)
+- [x] **Run Tests** - Run JUnit 5 tests of a Java project and report failures with stack traces (CI numbers come from Maven Surefire)
+- [x] **Shell Command** - Read-only diagnostic shell (git, mvn, npm …) with tool-side output control (char cap, regex filter) instead of shell pipes
 - [x] **Web Fetch** - Fetch URLs and convert to markdown for reading docs
 - [x] **List Projects** - Discover open projects with their type (java, maven, gradle)
 - [ ] **Git Tool** - Dedicated git operations (status, diff, commit, log) with structured output
@@ -108,6 +109,7 @@ Example workflows:
 - [x] `v1.4.x` **MCP stdio** support added using langchain4j
 - [x] `v1.7.5` **Peon Memory** added workspace memory to the LLM with keywords "remember this", "always do", "never do"
 - [x] `v2.0.0` **Custom Agents** https://peon-ai-4e.sterl.org/setup/custom-agents
+- [x] `v2.14.0` **Codegraph** support https://github.com/colbymchenry/codegraph
 
 ## .peon Config Directory (`~/.peon`)
 

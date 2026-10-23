@@ -19,6 +19,7 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.TokenUsage;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -33,9 +34,10 @@ public class ThreadSafeMemory {
     /**
      * Whether {@link #totalTokenUsed} currently contains an estimate component (R-CC-6,
      * docs/compact-context-counter.md). Set by every write site: estimate-driven writes
-     * (constructor restore, {@code add}, {@code reevaluateTokens}, fallback in
-     * {@code addResult}) mark it true, exact writes (provider input in {@code addResult},
-     * reset to 0 in {@code clear}/{@code replaceAll}) mark it false — 0 is exact.
+     * (constructor restore, {@code add}, {@code reevaluateTokens}, {@code addResult}) mark it
+     * true — after {@code addResult} the value is the provider input plus the chars/3 estimate of
+     * the appended messages (R-CC-19), so it always carries an estimate component. The reset to 0
+     * in {@code clear}/{@code replaceAll} marks it false — 0 is exact.
      */
     private volatile boolean tokenIsEstimate = false;
 
@@ -47,9 +49,27 @@ public class ThreadSafeMemory {
      */
     private volatile @Nullable Integer lastProviderInputTokens = null;
 
+    /**
+     * R-CC-18 (D3): one-shot mark that the NEXT {@code addResult}'s provider
+     * {@code inputTokenCount} describes the PRE-compact context. Volatile like the sibling
+     * flags — the memory is read from UI threads. Deliberately NOT set by {@code clear()}/
+     * {@code replaceAll()} (too coarse — those are followed by a FRESH provider value, e.g.
+     * after the pre-turn compact, which must be consumed as usual).
+     */
+    private volatile boolean providerUsageStale = false;
+
     /** @return true if the current token counter value contains an estimate component. */
     public boolean isTokenEstimate() {
         return tokenIsEstimate;
+    }
+
+    /**
+     * Next {@code addResult}'s provider {@code inputTokenCount} describes the PRE-compact context
+     * — derive from estimate instead. Set by {@code CompactSessionTool} on COMPACTED; consumed by
+     * the next {@code addResult}.
+     */
+    public void markProviderUsageStale() {
+        providerUsageStale = true;
     }
 
     /** R-CC-10: the last provider-reported input token count, or null when never reported/reset. */
@@ -60,7 +80,7 @@ public class ThreadSafeMemory {
     /**
      * R-CC-10: the compact-log diagnosis — the three context sizes side by side, each with its
      * source/flag. Appended by ALL three compact event lines (hint, entry, skip). One format, one
-     * implementation: {@code " | memory=<total>(estimate=<flag>) model=<input|n/a> estimate=<chars×2/7>"}.
+     * implementation: {@code " | memory=<total>(estimate=<flag>) model=<input|n/a> estimate=<chars/3>"}.
      */
     public synchronized String tokenDiagnosis() {
         String model = lastProviderInputTokens == null ? "n/a" : String.valueOf(lastProviderInputTokens);
@@ -103,11 +123,11 @@ public class ThreadSafeMemory {
                 && (!memory.isEmpty() && memory.getLast() instanceof ToolExecutionResultMessage tR)) {
             // https://github.com/sterlp/eclipse-peon-ai/issues/87
             // this can happen e.g. or rate limits or server errors...
-            log.warn("Detected tool result without AI response but a Usermessage is added! {} - {}", tR.id(), tR.toolName());
-            var repair = AiMessage.from("ok");
-            memory.add(repair);
-            memory.add(num);
-            append(List.of(repair, num));
+            log.warn("Detected tool result without AI response but a Usermessage is added! {} - {} - user message:\n{}", 
+                    tR.id(), tR.toolName(), num);
+            var toAdd = List.of(AiMessage.from("ok"), num);
+            memory.addAll(toAdd);
+            append(toAdd);
         } else {
             memory.add(message);
             append(message);
@@ -141,7 +161,7 @@ public class ThreadSafeMemory {
         if (StringUtil.hasNoValue(message)) return true;
         return memory.stream()
             .filter(m -> m instanceof UserMessage || m instanceof ToolExecutionResultMessage)
-            .map(m -> ChatMessageUtil.toString(m, 90000))
+            .map(m -> ChatMessageUtil.toString(m))
             .anyMatch(um -> um.contains(message));
     }
     
@@ -205,21 +225,50 @@ public class ThreadSafeMemory {
         memory.addAll(toolResult);
         appended.add(aiMessage);
         appended.addAll(toolResult);
-        var usage = ChatMessageUtil.tokenUsage(response);
-        totalTokenUsed = ChatMessageUtil.getTokenCount(response, memory);
-        tokenIsEstimate = usage == null || usage.inputTokenCount() == null;
-        if (usage != null && usage.inputTokenCount() != null) lastProviderInputTokens = usage.inputTokenCount();
+        if (providerUsageStale) {
+            // R-CC-18 (D3): this response's provider value describes the PRE-compact context —
+            // keep the small post-compact estimate; lastProviderInputTokens stays cleared
+            providerUsageStale = false;
+            reevaluateTokens();
+        } else {
+            updateTokenCounter(ChatMessageUtil.tokenUsage(response), appended);
+        }
         append(appended);
     }
 
     public synchronized void addResult(ChatResponse response) {
         var message = response.aiMessage();
         memory.add(message);
-        var usage = ChatMessageUtil.tokenUsage(response);
-        totalTokenUsed = ChatMessageUtil.getTokenCount(response, memory);
-        tokenIsEstimate = usage == null || usage.inputTokenCount() == null;
-        if (usage != null && usage.inputTokenCount() != null) lastProviderInputTokens = usage.inputTokenCount();
+        if (providerUsageStale) {
+            // R-CC-18 (D3): this response's provider value describes the PRE-compact context —
+            // keep the small post-compact estimate; lastProviderInputTokens stays cleared
+            providerUsageStale = false;
+            reevaluateTokens();
+        } else {
+            updateTokenCounter(ChatMessageUtil.tokenUsage(response), List.of(message));
+        }
         append(message);
+    }
+
+    /**
+     * R-CC-19 (docs/compact.md): the counter is forward-looking — the provider
+     * {@code inputTokenCount} of the last request plus the chars/3 estimate of everything
+     * appended since it (the AI message with the tool calls goes out again on the next request,
+     * and so do this round's tool results). The provider value alone is the PREVIOUS request —
+     * a large tool result would push the NEXT request over the limit while a stale counter stays
+     * under budget. Without a provider value (local model) the fallback is the chars/3 estimate
+     * of the whole memory — recomputed, never added, so already-estimated messages are not
+     * double-counted.
+     */
+    private void updateTokenCounter(@Nullable TokenUsage usage, List<ChatMessage> appended) {
+        var input = usage != null ? usage.inputTokenCount() : null;
+        if (input != null) {
+            totalTokenUsed = input + ChatMessageUtil.estimateTokens(appended);
+            lastProviderInputTokens = input; // R-CC-10: pure observation, unchanged
+        } else {
+            totalTokenUsed = ChatMessageUtil.estimateTokens(getCopy());
+        }
+        tokenIsEstimate = true; // an estimate component is always present after addResult
     }
 
     public synchronized void forEach(Consumer<ChatMessage> consumer) {

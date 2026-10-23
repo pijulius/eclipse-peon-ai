@@ -11,10 +11,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import org.sterl.llmpeon.agent.model.TaggedResult;
 import org.sterl.llmpeon.ai.AgentConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.compact.CompactConstants;
 import org.sterl.llmpeon.compact.CompactService;
+import org.sterl.llmpeon.compact.HandleToolLoopCompactComponent;
+import org.sterl.llmpeon.exception.ExceptionUtil;
 import org.sterl.llmpeon.model.CompactResult;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
@@ -56,28 +59,14 @@ public abstract class AbstractAgent implements AiAgent {
     private List<ContextItem> staticContext;
     private Supplier<List<ContextItem>> turnContextSupplier;
 
-    /**
-     * Fraction of the shared auto-compact budget at which THIS agent compacts (1.0 = the full
-     * {@link org.sterl.llmpeon.ai.LlmConfig#getAutoCompactAfter() budget}). Jon's RAM-only slaves set it
-     * below 1.0 so they compact earlier and keep their throw-away context lean.
-     */
-    private final double compactFactor;
-
     protected AbstractAgent(ConfiguredChatModel configuredModel, ToolService toolService) {
         this(configuredModel, toolService, new ThreadSafeMemory());
     }
 
     protected AbstractAgent(ConfiguredChatModel configuredModel, ToolService toolService, ThreadSafeMemory memory) {
-        this(configuredModel, toolService, memory, 1.0);
-    }
-
-    protected AbstractAgent(ConfiguredChatModel configuredModel, ToolService toolService, ThreadSafeMemory memory,
-            double compactFactor) {
         this.toolService = toolService;
         this.configuredModel = configuredModel;
         this.memory = Objects.requireNonNull(memory, "ThreadSafeMemory cannot be null");
-        // Clamp to (0,1]; a nonsense factor falls back to the full budget rather than compacting forever.
-        this.compactFactor = compactFactor > 0 && compactFactor <= 1.0 ? compactFactor : 1.0;
 
         Objects.requireNonNull(this.configuredModel, "ConfiguredChatModel cannot be null");
         Objects.requireNonNull(this.toolService, "ToolService cannot be null");
@@ -203,6 +192,15 @@ public abstract class AbstractAgent implements AiAgent {
         return messageQueue.add(msg);
     }
 
+    /**
+     * Rule 8 override: direct memory write — the same path {@link #handleAbortAndDrain} uses,
+     * so the running turn sees the message on its next model call. The queue is never touched.
+     */
+    @Override
+    public void injectUserMessage(String text) {
+        memory.add(UserMessage.from(text));
+    }
+
     /** Test seam: swap the queue (fixed {@code Clock} for Rule 9 Queued-At tests). Package-private. */
     void setMessageQueue(UserMessageQueue queue) { this.messageQueue = queue; }
 
@@ -210,15 +208,6 @@ public abstract class AbstractAgent implements AiAgent {
         float used = memory.getTotalTokenUsed();
         if (used < 100) return 0;
         return Math.round(100f * used / configuredModel.getConfig().getAutoCompactAfter());
-    }
-
-    /**
-     * Token count at which this agent auto-compacts before a turn: the shared
-     * {@link org.sterl.llmpeon.ai.LlmConfig#getAutoCompactAfter() budget} scaled by this agent's
-     * {@code compactFactor} (1.0 = full budget; slaves use less, so they compact earlier).
-     */
-    public int compactAfterTokens() {
-        return (int) Math.round(configuredModel.getConfig().getAutoCompactAfter() * compactFactor);
     }
 
     public boolean hasUserText(String message) {
@@ -313,17 +302,7 @@ public abstract class AbstractAgent implements AiAgent {
     protected ChatResponse doCall(String message, AiMonitor monitor) {
         monitor = AiMonitor.nullSafety(monitor);
         monitor.onCallStart(message);
-        // auto compress if we are close to full before we start (slaves trigger earlier via
-        // compactFactor). R-CC-8: only above MIN_COMPACT_MESSAGES — below that a compact skips/fails.
-        // R-CIB-1: autoCompactAfter <= 0 means "off" (like the Hint) — without this the gate would
-        // fire every turn (0 < tokens) while the Stager never caps.
-        if (configuredModel.getConfig().getAutoCompactAfter() > 0
-                && compactAfterTokens() < memory.getTotalTokenUsed()
-                && memory.size() > CompactConstants.MIN_COMPACT_MESSAGES) {
-            monitor.onTool("Auto Compact before execution, context to full " + compactAfterTokens() + "/" + memory.getTotalTokenUsed());
-            compact(monitor);
-        }
-
+        preTurnCompact(monitor); // R-CC-20.2: over 95 % of the raw budget, before the fresh message enters
         // Inject turn-scoped context on every turn (idempotent via contains-check)
         var userMessages = renderTurnContext(memory, turnContextSupplier, monitor);
 
@@ -350,6 +329,32 @@ public abstract class AbstractAgent implements AiAgent {
         return response;
     }
 
+    /**
+     * R-CC-20.2: the pre-turn over-budget check — over the 95 % band of the raw budget
+     * ({@link HandleToolLoopCompactComponent#overHintBand(int, int, int)}), run before the fresh
+     * user message enters the memory, so a fresh message is never lost to a compact (ADR-0010).
+     * One attempt per turn, no hint, no retry. The in-loop direct compact keeps its own 100 % rule
+     * (R-CC-18.1).
+     */
+    private void preTurnCompact(AiMonitor monitor) {
+        if (!HandleToolLoopCompactComponent.overHintBand(memory.getTotalTokenUsed(),
+                configuredModel.getConfig().getAutoCompactAfter(), memory.size())) return;
+        CompactResult result;
+        try {
+            result = compact(monitor); // in-turn: the CAS leaves the turn's working flag untouched
+        } catch (RuntimeException e) {
+            // R-CC-20.5: a failing compressor must not kill the turn before the fresh message enters.
+            // Cancellation is not a failure — a Stop still aborts the turn (R-CC-7 owns retry/classes).
+            if (ExceptionUtil.isCanceled(e)) throw e;
+            AiMonitor.nullSafety(monitor).onProblem("Pre-turn compact failed: " + e.getMessage());
+            return; // over budget only: the provider call is the honest outcome (same as FAILED_EMPTY)
+        }
+        if (result.status() != CompactResult.Status.COMPACTED) return; // SKIPPED_SMALL/FAILED_EMPTY: no retry, no hint
+        memory.reevaluateTokens(); // R-CC-2
+        AiMonitor.nullSafety(monitor).onTool("🗜 Pre-turn compact for " + getName()
+                + " (context over budget): " + result.resultLine() + memory.tokenDiagnosis()); // R-CC-10
+    }
+
     @Override
     public CompactResult compact(AiMonitor monitor) {
         // User-triggered compact acquires the working flag (R-CT-1); an in-loop compact runs
@@ -362,7 +367,7 @@ public abstract class AbstractAgent implements AiAgent {
             // summary) — with < 2 a direct re-compact would fire a real LLM call on those 2 (R16)
             if (memory.size() < CompactConstants.MIN_COMPACT_MESSAGES) return CompactResult.skippedSmall();
 
-            // R-CIB-1: the staging budget is the raw config value — compactFactor scales only the trigger
+            // R-CIB-1: the staging budget is the raw config value
             // R-CC-12: capture the last provider-reported input tokens BEFORE the clear below —
             // after it the value is gone (async-state-safety)
             var requestTokens = memory.getLastProviderInputTokens();
@@ -371,7 +376,7 @@ public abstract class AbstractAgent implements AiAgent {
             // R-CC-14: the service is monitor-free — the start line is emitted by the agent
             // (all five triggers funnel through here), same wording as before
             monitor.onTool("🗜 Compressing conversation " + messages.size() + " messages "
-                    + ChatMessageUtil.estimateTokens(messages) + " tokens"
+                    + ChatMessageUtil.estimateTokens(messages) + " tokens (estimate)"
                     + (compactCfg.getModel() == null ? "" : " using " + compactCfg.getModel()));
             var result = new CompactService(configuredModel).compact(
                     getName(), messages, memory.tokenDiagnosis(), requestTokens);
@@ -446,8 +451,10 @@ public abstract class AbstractAgent implements AiAgent {
     }
 
     /**
-     * Builds the full system prompt by appending rendered persistent context items
-     * to the agent's base system prompt. Cached until invalidated (e.g. after compact).
+     * Builds the full system prompt by appending the rendered persistent context items
+     * (body-only) to the agent's base system prompt, plus the harness-block format info
+     * ({@link TaggedResult#INFO}) exactly once (R-TR-6) — every agent can see tagged blocks.
+     * Cached until invalidated (e.g. after compact).
      */
     private String buildSystemPrompt(AiMonitor monitor) {
         if (systemMessage != null) return systemMessage;
@@ -455,15 +462,16 @@ public abstract class AbstractAgent implements AiAgent {
         var prompt = getSystemPrompt();
         if (staticContext != null) {
             for (var item : staticContext) {
-                String rendered = item.render();
+                var rendered = item.render();
                 if (rendered != null) {
                     if (StringUtil.hasValue(item.label())) {
                         monitor.onTool("📋 Loading " + item.label() + " (" + getName() + ")");
                     }
-                    prompt = prompt + System.lineSeparator() + System.lineSeparator() + rendered;
+                    prompt = prompt + System.lineSeparator() + System.lineSeparator() + rendered.body();
                 }
             }
         }
+        prompt = prompt + System.lineSeparator() + System.lineSeparator() + TaggedResult.INFO;
         this.systemMessage = prompt;
         return prompt;
     }
@@ -487,17 +495,13 @@ public abstract class AbstractAgent implements AiAgent {
         for (var item : items) {
             var key = item.dedupKey();
             if (key == null || !memory.containsUserMessage(key)) {
-                String rendered = item.render();
+                var rendered = item.render();
                 if (rendered == null) continue;
-                if (memory.containsMessage(rendered)) continue;
+                if (memory.containsMessage(rendered.toString())) continue;
                 if (StringUtil.hasValue(item.label())) {
                     monitor.onTool("📋 Loading " + item.label());
                 }
-                if (key == null) result.add(new TextContent(rendered));
-                else result.add(new TextContent(
-                        key + System.lineSeparator() +
-                        rendered + System.lineSeparator())
-                    );
+                result.add(TextContent.from(rendered.toString()));
             }
         }
         return result;

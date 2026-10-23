@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -23,6 +24,7 @@ import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.sterl.llmpeon.StreamMock;
+import org.sterl.llmpeon.TerminationProbe;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
@@ -35,7 +37,9 @@ import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.exception.ToolExecutionException;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -147,6 +151,28 @@ class ToolServiceTest {
         @Override public void withToolRequest(ToolLoopRequest request) {}
     }
 
+    /** A tool whose denial is wrapped two levels deep — proves the executor finds it in the cause chain. */
+    static class NestedDenialTool implements SmartTool {
+        @Tool("denies the write")
+        public String deny() {
+            throw new IllegalStateException("Tool failed - check why",
+                    new ExecutionException(new IllegalArgumentException(
+                            "Write denied: '/ui-automate/config.toml' is outside this agent's allowed paths")));
+        }
+        @Override public void withToolRequest(ToolLoopRequest request) {}
+    }
+
+    /** A tool that cancels while carrying a denial cause — cancel must win over the denial (D9). */
+    static class CancelWithDenialTool implements SmartTool {
+        @Tool("cancels with a denial cause")
+        public String cancelDenied() {
+            var cancel = new CancellationException("user canceled");
+            cancel.initCause(new IllegalArgumentException("Write denied"));
+            throw cancel;
+        }
+        @Override public void withToolRequest(ToolLoopRequest request) {}
+    }
+
     /**
      * A throwing tool goes through the tool-loop feedback path (onProblem + error result fed back to
      * the model), NOT through {@link org.sterl.llmpeon.streaming.ApiRetry} — the retry wraps only the
@@ -224,6 +250,96 @@ class ToolServiceTest {
         assertThat(round.get()).isEqualTo(1);
     }
 
+    /**
+     * R5 bullet 2 (docs/write-path-validator.md): an IllegalArgumentException ANYWHERE in the
+     * ToolExecutionException cause chain becomes the model-facing message — verbatim, not the
+     * generic "Tool failed - check why" fallback.
+     */
+    @Test
+    @Timeout(10)
+    void tool_nested_denial_returns_the_validator_message_to_the_model() {
+        // GIVEN — round 1: model asks for the denial tool; round 2: model answers
+        subject.replaceTool(new NestedDenialTool());
+        var round = new AtomicInteger();
+        var requests = new ArrayList<ChatRequest>();
+        var cm = mockWithHandler(req -> {
+            requests.add(req);
+            if (round.incrementAndGet() == 1) {
+                return ChatResponse.builder().aiMessage(AiMessage.builder()
+                        .toolExecutionRequests(List.of(ToolExecutionRequest.builder()
+                                .id("1").name("deny").arguments("{}").build()))
+                        .build()).build();
+            }
+            return ChatResponse.builder().aiMessage(AiMessage.from("done")).build();
+        });
+        var problems = new ArrayList<String>();
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onProblem(String message) { problems.add(message); }
+        };
+        var memory = new ThreadSafeMemory();
+        memory.add(UserMessage.from("go"));
+
+        // WHEN
+        var response = subject.executeLoop(ToolLoopRequest.builder()
+                .memory(memory)
+                .chatModel(new ConfiguredChatModel(LlmConfig.newOpenAi("foo"), cm))
+                .monitor(monitor)
+                .build());
+
+        // THEN — the loop recovered; the model got the denial verbatim in the round-2 payload
+        assertThat(response.aiMessage().text()).isEqualTo("done");
+        var resultMessage = requests.get(1).messages().stream()
+                .filter(ToolExecutionResultMessage.class::isInstance)
+                .map(ToolExecutionResultMessage.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertThat(resultMessage.text()).contains("Write denied");
+        assertThat(resultMessage.text()).doesNotContain("Tool failed - check why");
+        // AND — the problem surfaced to the monitor; the loop continued (no throw, no abort)
+        assertThat(problems).anyMatch(p -> p.contains("Write denied"));
+        assertThat(round.get()).isEqualTo(2);
+    }
+
+    /**
+     * D9: cancellation wins over a nested denial — a CancellationException carrying an
+     * IllegalArgumentException cause must still abort the loop, not feed the denial back.
+     *
+     * Mechanism: the named mutation ("IAE check before the cancel check") makes executeLoop
+     * spin non-interruptibly — JUnit's @Timeout would mark the test failed, but the engine
+     * still waits for the executor thread and the whole suite hangs. The daemon probe keeps
+     * the suite terminable (red in ~10 s instead of a hang). Same pattern as the
+     * ExceptionUtilTest cycle guards.
+     */
+    @Test
+    void tool_cancel_wins_over_a_nested_illegal_argument() {
+        // GIVEN — model asks for the cancel-with-denial tool; a second round would never happen
+        subject.replaceTool(new CancelWithDenialTool());
+        var round = new AtomicInteger();
+        var cm = mockWithHandler(req -> {
+            round.incrementAndGet();
+            return ChatResponse.builder().aiMessage(AiMessage.builder()
+                    .toolExecutionRequests(List.of(ToolExecutionRequest.builder()
+                            .id("1").name("cancelDenied").arguments("{}").build()))
+                    .build()).build();
+        });
+        var memory = new ThreadSafeMemory();
+        memory.add(UserMessage.from("go"));
+
+        // WHEN — bounded daemon probe (TerminationProbe), so a spinning loop cannot hang the suite
+        var probe = TerminationProbe.run("cancel-probe", 10_000, () -> subject.executeLoop(ToolLoopRequest.builder()
+                .memory(memory)
+                .chatModel(new ConfiguredChatModel(LlmConfig.newOpenAi("foo"), cm))
+                .build()));
+
+        // THEN — the loop aborts with the CancellationException, as before the denial mapping
+        assertTrue(probe.terminated(), "the loop must abort on cancellation, not spin");
+        assertThat(probe.thrown()).isInstanceOf(ToolExecutionException.class)
+                .hasCauseInstanceOf(CancellationException.class);
+        // AND — only one model round; the nested IAE did NOT turn the cancel into a tool error
+        assertThat(round.get()).isEqualTo(1);
+    }
+
     public StreamingChatModel mockWithHandler(Function<ChatRequest, ChatResponse> fn) {
         var cm = mock(StreamingChatModel.class);
         doAnswer(inv -> {
@@ -281,7 +397,7 @@ class ToolServiceTest {
                 .build();
 
         // WHEN — the loop reaches the forced compact hint (stuck > MAX_STUCK_ITERATIONS - 2)
-        // THEN — it must not crash on req.getAgent().getName() (ToolService.addCompactHintIfNeeded)
+        // THEN — it must not crash on req.getAgent().getName() (HandleToolLoopCompactComponent)
         assertThatNoException().isThrownBy(() -> subject.executeLoop(req));
     }
 

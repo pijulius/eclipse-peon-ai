@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.eclipse.core.resources.IFile;
+
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.IPath;
 import org.eclipse.jdt.core.IOrdinaryClassFile;
@@ -219,7 +220,7 @@ public class UserContextTest {
         // THEN the selection survives and get() contains the selection context
         var item = item(context.get(), "User text selection");
         assertNotNull(item);
-        assertTrue(item.render().contains("10: selected text"));
+        assertTrue(item.render().body().contains("10: selected text"));
     }
 
     // UC-SEL-1
@@ -252,7 +253,7 @@ public class UserContextTest {
 
         // THEN the selection goes out with a line-numbered snippet — no silent drop
         assertNotNull(item);
-        assertTrue(item.render().contains("10: selected text"));
+        assertTrue(item.render().body().contains("10: selected text"));
     }
 
     // UC-SEL-3
@@ -268,7 +269,7 @@ public class UserContextTest {
 
         // THEN the item carries path + selected lines + snippet, but NOT the full file content
         assertNotNull(item);
-        var render = item.render();
+        var render = item.render().body();
         assertTrue(render.contains("/p/A.java"));
         assertTrue(render.contains("Selected lines 10-10"));
         assertTrue(render.contains("10: selected text"));
@@ -331,7 +332,7 @@ public class UserContextTest {
         assertNull(context.getJavaType());
         var item = item(context.get(), "User text selection");
         assertNotNull(item);
-        assertTrue(item.render().contains("10: selected text"));
+        assertTrue(item.render().body().contains("10: selected text"));
     }
 
     // UC-SEL-4
@@ -514,9 +515,9 @@ public class UserContextTest {
         return items.stream().filter(i -> label.equals(i.label())).findFirst().orElse(null);
     }
 
-    /** All rendered texts — the 1-arg SimpleContextItem carries its message in text, not label. */
+    /** All rendered bodies — the 1-arg SimpleContextItem carries its message in the body, not label. */
     private static List<String> rendersOf(List<ContextItem> items) {
-        return items.stream().map(ContextItem::render).toList();
+        return items.stream().map(i -> i.render() == null ? "" : i.render().body()).toList();
     }
 
     private static int orderCount(List<ContextItem> items) {

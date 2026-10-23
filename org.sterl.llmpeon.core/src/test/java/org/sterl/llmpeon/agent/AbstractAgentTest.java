@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -20,6 +21,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.sterl.llmpeon.StreamMock;
+import org.sterl.llmpeon.agent.model.TaggedResult;
+import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.model.CompactResult;
@@ -31,12 +34,15 @@ import org.sterl.llmpeon.queuedmessages.UserMessageQueue;
 import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
 import org.sterl.llmpeon.tool.ToolService;
+import org.sterl.llmpeon.tool.model.SimpleMessage;
 
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.TokenUsage;
 
 class AbstractAgentTest {
 
@@ -273,7 +279,7 @@ class AbstractAgentTest {
         });
         var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
         var content = new AtomicReference<>("old context");
-        agent.setStaticContext(List.of((ContextItem) () -> content.get()));
+        agent.setStaticContext(List.of((ContextItem) () -> new TaggedResult("context", content.get())));
 
         // WHEN — call 1 builds the system prompt with the old content
         agent.call("first", monitor -> {});
@@ -304,32 +310,6 @@ class AbstractAgentTest {
                 .orElseThrow();
     }
 
-    /** By default an agent compacts at the full shared budget (compactFactor 1.0). */
-    @Test
-    void compactAfterTokens_defaultsToFullBudget() {
-        var config = LlmConfig.builder().model("mock").autoCompactAfter(80000).build();
-        var agent = new AiDevAgent(new ConfiguredChatModel(config, streamMock.buildMock(r -> null)), new ToolService());
-        assertThat(agent.compactAfterTokens()).isEqualTo(80000);
-    }
-
-    /** Jon's slaves are constructed with a lower compactFactor so they compact earlier (R10). */
-    @Test
-    void compactAfterTokens_scaledByCompactFactor() {
-        var config = LlmConfig.builder().model("mock").autoCompactAfter(80000).build();
-        var model = new ConfiguredChatModel(config, streamMock.buildMock(r -> null));
-        assertThat(new AiDevAgent(model, new ToolService(), 0.7).compactAfterTokens()).isEqualTo(56000);
-        assertThat(new AiPlanAgent(model, new ToolService(), 0.7).compactAfterTokens()).isEqualTo(56000);
-    }
-
-    /** A nonsense factor (<=0 or >1) falls back to the full budget rather than compacting forever. */
-    @Test
-    void compactAfterTokens_nonsenseFactor_fallsBackToFullBudget() {
-        var config = LlmConfig.builder().model("mock").autoCompactAfter(80000).build();
-        var model = new ConfiguredChatModel(config, streamMock.buildMock(r -> null));
-        assertThat(new AiDevAgent(model, new ToolService(), 0).compactAfterTokens()).isEqualTo(80000);
-        assertThat(new AiDevAgent(model, new ToolService(), 1.5).compactAfterTokens()).isEqualTo(80000);
-    }
-
     /** tokenContextUsedInPercent() calculates percentage relative to autoCompactAfter budget. */
     @Test
     void tokenContextUsedInPercent_calculatesCorrectly() {
@@ -340,7 +320,7 @@ class AbstractAgentTest {
             @Override public int getTotalTokenUsed() { return 4000; }
         };
         
-        var agent = new AbstractAgent(model, new ToolService(), testMemory, 1.0) {
+        var agent = new AbstractAgent(model, new ToolService(), testMemory) {
             @Override public String getName() { return "test"; }
             @Override public String getSystemPrompt() { return "test"; }
         };
@@ -362,7 +342,7 @@ class AbstractAgentTest {
             @Override public int getTotalTokenUsed() { return 50; }
         };
         
-        var agent = new AbstractAgent(model, new ToolService(), testMemory, 1.0) {
+        var agent = new AbstractAgent(model, new ToolService(), testMemory) {
             @Override public String getName() { return "test"; }
             @Override public String getSystemPrompt() { return "test"; }
         };
@@ -511,19 +491,43 @@ class AbstractAgentTest {
      */
     @Test
     void inLoopCompactDoesNotReleaseTurnsWorkingFlag() {
-        // GIVEN — auto-compact threshold exceeded so doCall compacts in-loop before the turn
-        var config = LlmConfig.builder().model("mock").autoCompactAfter(100).build();
+        // GIVEN — the counter starts BELOW the raw budget (50 ≤ 100: the pre-turn check R-CC-20
+        // does not fire) and the tool round's response sets it over (101 > 100) so the in-loop
+        // direct compact fires after the tool round; call 1 is a tool round (unknown "probe" —
+        // same pattern as ToolServiceDirectCompactTest), call 2 is the turn's own LLM call
+        // where isWorking() is read
+        var config = LlmConfig.builder()
+                .model("mock")
+                .autoCompactAfter(100)
+                .modelConfigs(Map.of(AgentModelConfig.COMPACT,
+                        new AgentModelConfig(null, null, "compact-model", null, null, null)))
+                .build();
         var callCount = new AtomicInteger();
+        var compactCalls = new AtomicInteger();
+        var counter = new AtomicInteger(50); // below budget: the pre-turn check must not fire
         var workingDuringTurnCall = new AtomicReference<Boolean>();
         var agentRef = new AtomicReference<AbstractAgent>();
         var mockModel = streamMock.buildMock(r -> {
-            if (callCount.incrementAndGet() == 2) {
-                workingDuringTurnCall.set(agentRef.get().isWorking());
+            if ("compact-model".equals(r.modelName())) {
+                compactCalls.incrementAndGet(); // the in-loop compressor call
+                return ChatResponse.builder().aiMessage(AiMessage.from("Summary of the session")).build();
             }
-            return ChatResponse.builder().aiMessage(AiMessage.aiMessage("OK")).build();
+            if (callCount.incrementAndGet() == 1) {
+                // tool round -> after it the state-based decision fires the direct in-loop compact
+                counter.set(101); // the provider usage pushes the counter over the raw budget
+                return ChatResponse.builder()
+                        .aiMessage(AiMessage.builder()
+                                .toolExecutionRequests(List.of(ToolExecutionRequest.builder()
+                                        .id("1").name("probe").arguments("{}").build()))
+                                .build())
+                        .tokenUsage(new TokenUsage(101, 0, 101))
+                        .build();
+            }
+            workingDuringTurnCall.set(agentRef.get().isWorking()); // the turn's own LLM call
+            return ChatResponse.builder().aiMessage(AiMessage.from("OK")).build();
         });
         var memory = new ThreadSafeMemory() {
-            @Override public int getTotalTokenUsed() { return 101; }
+            @Override public int getTotalTokenUsed() { return counter.get(); }
         };
         // 4 messages — R-CC-8: the auto-gate fires only above MIN_COMPACT_MESSAGES (3)
         memory.add(UserMessage.from("m1"));
@@ -531,16 +535,18 @@ class AbstractAgentTest {
         memory.add(UserMessage.from("m3"));
         memory.add(AiMessage.from("m4"));
         var agent = new AbstractAgent(
-                new ConfiguredChatModel(config, mockModel), new ToolService(), memory, 1.0) {
+                new ConfiguredChatModel(config, mockModel), new ToolService(), memory) {
             @Override public String getName() { return "test"; }
             @Override public String getSystemPrompt() { return "test"; }
         };
         agentRef.set(agent);
 
-        // WHEN — one turn; the in-loop compact (mock call 1) must not drop the turn's flag
+        // WHEN — one turn; the in-loop compact (after the call-1 tool round) must not drop the flag
         agent.call("test", monitor -> {});
 
-        // THEN — still working during the turn's own LLM call (mock call 2), released only after call()
+        // THEN — the in-loop compact actually fired (compressor called once), the flag survived it
+        // (still working during the turn's own LLM call), and was released only after call()
+        assertThat(compactCalls.get()).isEqualTo(1);
         assertThat(workingDuringTurnCall.get()).isTrue();
         assertThat(agent.isWorking()).isFalse();
     }
@@ -569,6 +575,31 @@ class AbstractAgentTest {
         // AND — exactly one LLM call for the queued payload
         assertThat(streamMock.getCallCount()).isEqualTo(1);
     }
+
+    /**
+     * Rule 8 override: injectUserMessage writes directly into the memory (the running turn
+     * picks it up on its next model call) — the queue is never touched.
+     */
+    @Test
+    void test_injectUserMessage_appendsUserMessage_notQueued() {
+        // GIVEN — a fresh agent, no call in flight
+        var config = LlmConfig.builder().model("mock").build();
+        var mockModel = streamMock.buildMock(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("OK")).build());
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+
+        // WHEN — direct injection, as the !-override performs while the agent works
+        agent.injectUserMessage("bitte abbrechen");
+
+        // THEN — the memory ends with the exact user message …
+        var memory = agent.getMemory().getCopy();
+        assertThat(memory).hasSize(1);
+        assertThat(memory.get(0)).isInstanceOf(UserMessage.class);
+        assertThat(extractUserTexts(memory)).containsExactly("bitte abbrechen");
+        // AND — … and nothing was routed through the queue
+        assertThat(agent.getQueuedMessageCount()).isZero();
+    }
+
 
 
     /** call() rebuilds systemMessage after compact cleared it. */
@@ -601,7 +632,8 @@ class AbstractAgentTest {
 
     /**
      * R-CC-8: with no history (0 messages) the auto-gate skips on message count even though the
-     * token threshold is exceeded — the system prompt is still built exactly once for the turn.
+     * token threshold is exceeded — the MIN guard also catches the pre-turn check (R-CC-20), so
+     * nothing compacts and the system prompt is still built exactly once for the turn.
      */
     @Test
     void systemPromptBuiltOnceWhenAutoCompactSkipsOnMessageCount() {
@@ -612,14 +644,14 @@ class AbstractAgentTest {
             @Override public int getTotalTokenUsed() { return 101; }
         };
         var agent = new AbstractAgent(
-                new ConfiguredChatModel(config, mockModel), new ToolService(), memory, 1.0) {
+                new ConfiguredChatModel(config, mockModel), new ToolService(), memory) {
             @Override public String getName() { return "test"; }
             @Override public String getSystemPrompt() { return "test"; }
         };
         var renderCount = new AtomicInteger();
         agent.setStaticContext(List.of((ContextItem) () -> {
             renderCount.incrementAndGet();
-            return "persistent context";
+            return new TaggedResult("context", "persistent context");
         }));
 
         agent.call("test", monitor -> {});
@@ -628,12 +660,13 @@ class AbstractAgentTest {
     }
 
     /**
-     * R-CC-8: exactly MIN_COMPACT_MESSAGES (3) messages with the token threshold exceeded — the
-     * auto-gate must NOT fire (it needs MORE than 3), so no compressor call: only the turn's LLM call.
+     * R-CC-8: exactly MIN_COMPACT_MESSAGES (3) messages with the token threshold exceeded (101 > 100)
+     * — the pre-turn gate (R-CC-20) must NOT fire (it needs MORE than 3): no compressor call, no
+     * event line, and the fresh message lands in the memory untouched.
      */
     @Test
     void autoGateNeedsMoreThanMinCompactMessages() {
-        // GIVEN — exactly 3 messages, token threshold exceeded
+        // GIVEN — exactly 3 messages, token threshold exceeded (101 > 100)
         var config = LlmConfig.builder().model("mock").autoCompactAfter(100).build();
         var callCount = new AtomicInteger();
         var mockModel = streamMock.buildMock(r -> {
@@ -645,23 +678,32 @@ class AbstractAgentTest {
         };
         memory.add(UserMessage.from("m1"));
         memory.add(AiMessage.from("m2"));
-        memory.add(UserMessage.from("m3"));
+        memory.add(AiMessage.from("m3"));
         var agent = new AbstractAgent(
-                new ConfiguredChatModel(config, mockModel), new ToolService(), memory, 1.0) {
+                new ConfiguredChatModel(config, mockModel), new ToolService(), memory) {
             @Override public String getName() { return "test"; }
             @Override public String getSystemPrompt() { return "test"; }
         };
+        var toolLines = new ArrayList<String>();
 
         // WHEN — one turn
-        agent.call("test", monitor -> {});
+        agent.call("test", new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onTool(String message) { toolLines.add(message); }
+        });
 
-        // THEN — the auto-gate did not fire (3 is not > 3): only the turn's LLM call, no compressor
+        // THEN — the pre-turn gate did not fire (3 is not > 3): only the turn's LLM call …
         assertThat(callCount.get()).isEqualTo(1);
+        // AND — no compact event line …
+        assertThat(toolLines).noneMatch(l -> l.contains("Pre-turn compact"));
+        // AND — the fresh message and the full history are untouched in the memory
+        assertThat(agent.hasUserText("test")).isTrue();
+        assertThat(memory.size()).isEqualTo(5); // 3 seeded + the fresh message + the turn's AI response
     }
     /**
-     * R-CIB-1: autoCompactAfter <= 0 means "off" (like the Hint) — even with more than
-     * MIN_COMPACT_MESSAGES and the token threshold exceeded, the auto-gate must NOT fire:
-     * only the turn's LLM call, no compressor call.
+     * R-CIB-1: autoCompactAfter <= 0 means "off" — even with more than MIN_COMPACT_MESSAGES and
+     * the token threshold exceeded (101 > 0), the pre-turn gate (R-CC-20) must NOT fire: no
+     * compressor call, no event line, and the fresh message lands in the memory untouched.
      */
     @Test
     void compactWithZeroBudget_gateOff() {
@@ -680,16 +722,25 @@ class AbstractAgentTest {
         memory.add(UserMessage.from("m3"));
         memory.add(AiMessage.from("m4"));
         var agent = new AbstractAgent(
-                new ConfiguredChatModel(config, mockModel), new ToolService(), memory, 1.0) {
+                new ConfiguredChatModel(config, mockModel), new ToolService(), memory) {
             @Override public String getName() { return "test"; }
             @Override public String getSystemPrompt() { return "test"; }
         };
+        var toolLines = new ArrayList<String>();
 
         // WHEN — one turn
-        agent.call("test", monitor -> {});
+        agent.call("test", new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onTool(String message) { toolLines.add(message); }
+        });
 
-        // THEN — the auto-gate is off (budget <= 0): only the turn's LLM call, no compressor
+        // THEN — the pre-turn gate is off (budget <= 0): only the turn's LLM call …
         assertThat(callCount.get()).isEqualTo(1);
+        // AND — no compact event line …
+        assertThat(toolLines).noneMatch(l -> l.contains("Pre-turn compact"));
+        // AND — the fresh message and the full history are untouched in the memory
+        assertThat(agent.hasUserText("test")).isTrue();
+        assertThat(memory.size()).isEqualTo(6); // 4 seeded + the fresh message + the turn's AI response
     }
 
 
@@ -892,11 +943,11 @@ class AbstractAgentTest {
         AtomicInteger renderCount = new AtomicInteger();
         AtomicReference<String> content = new AtomicReference<>("memory v1");
         ContextItem keyed = new ContextItem() {
-            @Override public String render() {
+            @Override public TaggedResult render() {
                 renderCount.incrementAndGet();
-                return "C:/x/memory.md:\n---\n" + content.get();
+                return new TaggedResult("context: C:/x/memory.md", content.get());
             }
-            @Override public String dedupKey() { return "C:/x/memory.md"; }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: C:/x/memory.md"; }
         };
         agent.setTurnContextSupplier(() -> List.of(keyed));
 
@@ -927,9 +978,11 @@ class AbstractAgentTest {
 
         var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
         ContextItem keyed = new ContextItem() {
-            @Override public String render() { return "/proj/docs/memory.md:\n---\nmemory content"; }
+            @Override public TaggedResult render() {
+                return new TaggedResult("context: /proj/docs/memory.md", "memory content");
+            }
             @Override public String label() { return "/proj/docs/memory.md"; }
-            @Override public String dedupKey() { return "/proj/docs/memory.md"; }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: /proj/docs/memory.md"; }
         };
         agent.setTurnContextSupplier(() -> List.of(keyed));
 
@@ -960,9 +1013,9 @@ class AbstractAgentTest {
 
         var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
         ContextItem missing = new ContextItem() {
-            @Override public String render() { return null; }
+            @Override public TaggedResult render() { return null; }
             @Override public String label() { return "/proj/docs/missing.md"; }
-            @Override public String dedupKey() { return "/proj/docs/missing.md"; }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: /proj/docs/missing.md"; }
         };
         agent.setTurnContextSupplier(() -> List.of(missing));
 
@@ -993,15 +1046,16 @@ class AbstractAgentTest {
 
         AtomicInteger renderCount = new AtomicInteger();
         ContextItem keyed = new ContextItem() {
-            @Override public String render() {
+            @Override public TaggedResult render() {
                 renderCount.incrementAndGet();
-                return "/proj/docs/memory.md:\n---\nfile content body";
+                return new TaggedResult("context: /proj/docs/memory.md", "file content body");
             }
-            @Override public String dedupKey() { return "/proj/docs/memory.md"; }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: /proj/docs/memory.md"; }
         };
 
-        // Pre-add the keyed content to memory (already injected before)
-        agent.addMessage(UserMessage.from("/proj/docs/memory.md:\n---\nfile content body"));
+        // Pre-add the block to memory (already injected before)
+        agent.addMessage(UserMessage.from(
+                new TaggedResult("context: /proj/docs/memory.md", "file content body").toString()));
         agent.setTurnContextSupplier(() -> List.of(keyed));
 
         // WHEN — a turn runs restoreTurnContext without clearing memory
@@ -1014,7 +1068,7 @@ class AbstractAgentTest {
     }
 
     /** Header-Dedup (Bugfix 2026-08-16): a Memory message that only mentions the bare path
-        (e.g. a Compact message) does NOT dedupe — the exact header is missing →
+        (e.g. a Compact message) does NOT dedupe — the exact block start line is missing →
         the item is still injected. */
     @Test
     void test_restoreTurnContext_barePathInHistory_stillInjects() {
@@ -1025,13 +1079,12 @@ class AbstractAgentTest {
         var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
 
         AtomicInteger renderCount = new AtomicInteger();
-        String header = "C:/x/memory.md" + ":" + System.lineSeparator() + "---" + System.lineSeparator();
         ContextItem keyed = new ContextItem() {
-            @Override public String render() {
+            @Override public TaggedResult render() {
                 renderCount.incrementAndGet();
-                return header + "file content body";
+                return new TaggedResult("context: C:/x/memory.md", "file content body");
             }
-            @Override public String dedupKey() { return header; }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: C:/x/memory.md"; }
         };
 
         // GIVEN — history only mentions the bare path (e.g. a Compact message), no exact header
@@ -1046,7 +1099,7 @@ class AbstractAgentTest {
         assertThat(extractUserTexts(agent.getMemory().getCopy()))
                 .anyMatch(t -> t.contains("file content body"));
 
-        // AND — second call: the exact header is now in history → no re-injection
+        // AND — second call: the exact block start line is now in history → no re-injection
         agent.call("again", monitor -> {});
         assertThat(renderCount.get()).isOne();
     }
@@ -1060,8 +1113,10 @@ class AbstractAgentTest {
 
         var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
         ContextItem keyed = new ContextItem() {
-            @Override public String render() { return "/proj/docs/memory.md:\n---\nfile content body"; }
-            @Override public String dedupKey() { return "/proj/docs/memory.md"; }
+            @Override public TaggedResult render() {
+                return new TaggedResult("context: /proj/docs/memory.md", "file content body");
+            }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: /proj/docs/memory.md"; }
         };
         agent.setTurnContextSupplier(() -> List.of(keyed));
 
@@ -1089,8 +1144,10 @@ class AbstractAgentTest {
         var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
         AtomicReference<String> key = new AtomicReference<>("/projA/docs/memory.md");
         ContextItem keyed = new ContextItem() {
-            @Override public String render() { return key.get() + ":\n---\nfile content body"; }
-            @Override public String dedupKey() { return key.get(); }
+            @Override public TaggedResult render() {
+                return new TaggedResult("context: " + key.get(), "file content body");
+            }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: " + key.get(); }
         };
         agent.setTurnContextSupplier(() -> List.of(keyed));
 
@@ -1129,5 +1186,119 @@ class AbstractAgentTest {
 
         // THEN — no onTool calls for unlabeled items
         assertThat(toolMessages).noneMatch(m -> m.startsWith("📋 Loading "));
+    }
+
+    // R-TR-3
+    @Test
+    void test_renderTurnContext_injectsExactBlock_noKeyPrefix() {
+        // GIVEN — a keyed item; the old format prefixed the bare key line before the block
+        var config = LlmConfig.builder().model("mock").autoCompactAfter(80000).build();
+        var mockModel = streamMock.buildMock(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("OK")).build());
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+        var block = new TaggedResult("context: /proj/docs/memory.md", "memory content");
+        ContextItem keyed = new ContextItem() {
+            @Override public TaggedResult render() { return block; }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: /proj/docs/memory.md"; }
+        };
+        agent.setTurnContextSupplier(() -> List.of(keyed));
+
+        // WHEN
+        agent.call("hi", monitor -> {});
+
+        // THEN — the merged user message LEADS with exactly the block: no key prefix line
+        var userTexts = extractUserTexts(agent.getMemory().getCopy());
+        assertThat(userTexts).hasSize(1);
+        assertThat(userTexts.get(0)).startsWith(block.toString());
+        assertThat(userTexts.get(0).lines().toList()).doesNotContain("/proj/docs/memory.md");
+    }
+
+    // R-TR-3
+    @Test
+    void test_renderTurnContext_pureBlockIsReinjectableOnlyAfterCompact() {
+        // GIVEN — a keyed item; the block start line in history is the only dedup signal
+        var config = LlmConfig.builder().model("mock").build();
+        var mockModel = streamMock.buildMock(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("OK")).build());
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+        AtomicInteger renderCount = new AtomicInteger();
+        ContextItem keyed = new ContextItem() {
+            @Override public TaggedResult render() {
+                renderCount.incrementAndGet();
+                return new TaggedResult("context: /proj/docs/memory.md", "memory content");
+            }
+            @Override public String dedupKey() { return TaggedResult.PREFIX + "context: /proj/docs/memory.md"; }
+        };
+        agent.setTurnContextSupplier(() -> List.of(keyed));
+
+        // WHEN — Turn 1 injects the pure block
+        agent.call("hi", monitor -> {});
+        assertThat(renderCount.get()).isOne();
+
+        // AND — Turn 2 (no compact): the start line is in history → skipped
+        agent.call("again", monitor -> {});
+        assertThat(renderCount.get()).isOne();
+
+        // AND — one more message so memory reaches the R16 guard minimum of 3
+        agent.addMessage(AiMessage.from("more"));
+
+        // WHEN — compact clears memory; restore re-injects the block
+        agent.compact(monitor -> {});
+
+        // THEN — rendered again after compact, content is back
+        assertThat(renderCount.get()).isEqualTo(2);
+        assertThat(extractUserTexts(agent.getMemory().getCopy()))
+                .anyMatch(t -> t.contains("memory content"));
+    }
+
+    // R-TR-6
+    @Test
+    void test_buildSystemPrompt_containsInfoExactlyOnce() {
+        // GIVEN — agent with a labeled static context item
+        var config = LlmConfig.builder().model("mock").autoCompactAfter(80000).build();
+        List<List<ChatMessage>> sent = new ArrayList<>();
+        var mockModel = streamMock.buildMock(r -> {
+            sent.add(new ArrayList<>(r.messages()));
+            return ChatResponse.builder().aiMessage(AiMessage.aiMessage("OK")).build();
+        });
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+        agent.setStaticContext(List.of(new SimpleContextItem("Static env info", "env body text")));
+
+        // WHEN
+        agent.call("test", monitor -> {});
+
+        // THEN — INFO exactly once; the static item renders body-only (no block header of its own)
+        var prompt = systemMessageOf(sent.get(0));
+        assertThat(countOccurrences(prompt, TaggedResult.INFO)).isOne();
+        assertThat(prompt).contains("env body text");
+        assertThat(prompt).doesNotContain(TaggedResult.PREFIX + "context: Static env info");
+    }
+
+    // R-TR-6
+    @Test
+    void test_buildSystemPrompt_infoSurvivesCompactRebuild() {
+        // GIVEN — agent with a static context item; a turn builds the cached prompt
+        var config = LlmConfig.builder().model("mock").build();
+        List<List<ChatMessage>> sent = new ArrayList<>();
+        var mockModel = streamMock.buildMock(r -> {
+            sent.add(new ArrayList<>(r.messages()));
+            return ChatResponse.builder().aiMessage(AiMessage.aiMessage("compressed")).build();
+        });
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+        agent.setStaticContext(List.of(new SimpleContextItem("Static env info", "env body text")));
+
+        agent.call("first", monitor -> {});
+
+        // AND — one more message so memory reaches the R16 guard minimum of 3
+        agent.addMessage(AiMessage.from("more"));
+
+        // WHEN — compact clears the cached prompt; the next call rebuilds it
+        agent.compact(monitor -> {});
+        agent.call("second", monitor -> {});
+
+        // THEN — the rebuilt prompt carries INFO exactly once again
+        var prompt = systemMessageOf(sent.get(sent.size() - 1));
+        assertThat(countOccurrences(prompt, TaggedResult.INFO)).isOne();
+        assertThat(prompt).contains("env body text");
     }
 }

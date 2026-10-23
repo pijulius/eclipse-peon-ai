@@ -42,9 +42,8 @@ export default defineConfig({
             { text: 'Configuration', link: '/setup/configuration' },
             { text: 'Advanced Configuration', link: '/setup/advanced-configuration' },
             { text: 'MCP', link: '/setup/mcp-configuration' },
+            { text: 'Codegraph', link: '/setup/codegraph' },
             { text: 'Voice', link: '/setup/voice-config' },
-            { text: 'Which model?', link: '/model-checks' },
-            { text: 'Qwen tuning', link: '/setup/qwen3627b_lmstudio_optimization' },
             { text: 'llama.cpp', link: '/setup/llama' },
             { text: 'Troubleshooting', link: '/setup/troubleshooting' }
           ]

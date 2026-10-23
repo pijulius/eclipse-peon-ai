@@ -74,13 +74,13 @@ class AbstractAgentCompactResultTest {
     }
 
     // R-CC-3
+    // R-CC-20
     @Test
     @Timeout(10)
     void autoCompactRetriesAfterFailure() {
         // GIVEN — the auto-compact gate below the counter the compact request reports (260000),
         // a compressor that always fails with an empty summary, and a small pre-compact memory
-        // (the counter crosses the gate via the compact request's own usage — a pre-set addResult
-        // would fire the gate before turn 1 and muddy the retry count)
+        // (the counter crosses the gate via the compact request's own usage)
         var config = LlmConfig.builder()
                 .model("main-model")
                 .autoCompactAfter(200000)
@@ -118,13 +118,16 @@ class AbstractAgentCompactResultTest {
             @Override public boolean isCanceled() { return canceled.get(); }
         };
 
-        // WHEN — turn 1: the model calls compactSession, the compressor fails (call 1);
-        // turn 2: the real counter (260000 > 200000) must re-fire the auto-compact gate
+        // WHEN — turn 1: the model calls compactSession, the compressor fails (call 1), and the
+        // over-budget state (260000 > 200000) fires the direct in-loop attempt (call 2, R-CC-18,
+        // FAILED_EMPTY); the over-budget state persists, so turn 2's pre-turn check (R-CC-20 —
+        // one attempt per turn) makes the third attempt (call 3, FAILED_EMPTY)
         agent.call("start", monitor);
         agent.call("next", monitor);
 
-        // THEN — the failed compact did not silence the gate: the compressor is tried again
-        assertThat(compactCalls.get()).isEqualTo(2);
+        // THEN — the failed compacts did not silence the gates: 3 attempts — turn 1 tool attempt +
+        // turn 1 direct attempt (R-CC-18) + turn 2 pre-turn attempt (R-CC-20), all FAILED_EMPTY
+        assertThat(compactCalls.get()).isEqualTo(3);
         // AND — the failure was reported, not swallowed
         assertThat(problems).anyMatch(p -> p.contains("Compact failed: compressor returned no summary for " + AiDevAgent.NAME));
     }

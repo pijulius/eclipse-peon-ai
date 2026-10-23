@@ -43,10 +43,8 @@ public class UserContext {
 
         var result = new LinkedList<ContextItem>();
         if (currentProject != null) {
-            result.add(new SimpleContextItem("Project info " + currentProject.getName(),
-                    PROJECT_TAG + System.lineSeparator() + EclipseUtil.projectInfo(currentProject)
-                )
-            );
+            var info = PROJECT_TAG + System.lineSeparator() + EclipseUtil.projectInfo(currentProject);
+            result.add(new SimpleContextItem("Project info " + currentProject.getName(), info));
         }
         addUserSelection(result);
         synchronized (addOneTimeOrders) {

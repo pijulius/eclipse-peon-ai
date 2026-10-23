@@ -1,4 +1,3 @@
-
 package org.sterl.llmpeon.tool.tools;
 
 import java.io.BufferedReader;
@@ -7,16 +6,15 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
 import org.sterl.llmpeon.shared.ArgsUtil;
 import org.sterl.llmpeon.shared.CallStats;
+import org.sterl.llmpeon.shared.OutputTrim;
 import org.sterl.llmpeon.shared.SearchQuery;
 import org.sterl.llmpeon.shared.StringUtil;
+import org.sterl.llmpeon.shared.UserToolEnvironment;
 
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -31,14 +29,10 @@ public class ShellTool extends AbstractTool {
 
     @FunctionalInterface
     public interface ShellConfirmationProvider {
-        String confirm(String command, String workingDirectory);
+        String confirm(String command, String workDir);
     }
 
     private static final int DEFAULT_TIMEOUT_S = 60;
-    private static final int MAX_OUTPUT_LENGTH = 3000;
-    private static final int DEFAULT_TAIL_LINES = 60;
-
-    private static volatile UserToolEnvironment userToolEnvironment;
 
     private ShellConfirmationProvider confirmationProvider = null;
     private Supplier<Path> defaultWorkingDir = null; // set at construction, before first use (same as confirmationProvider)
@@ -68,31 +62,35 @@ public class ShellTool extends AbstractTool {
             + "\ntmpdir: " + System.getProperty("java.io.tmpdir");
     }
 
-    @Tool(name = SHELL_RUN_COMMAND, value = "Run a shell command (mvn, npm, git). Not for file I/O — use read/write tools.")
+    @Tool(name = SHELL_RUN_COMMAND, value = "Run a shell command — only for build, test and git. Reading or searching files → use the Read/Grep tools. Output is trimmed beyond maxChars (default "
+            + OutputTrim.DEFAULT_MAX_CHARS + " chars, head + tail excerpt; lines over " + OutputTrim.MAX_LINE_CHARS + " chars cut).")
     public String shellRunCommand(
             @P(description = "shell command", name = "command") 
             String command,
-            @P(description = "use disk path not eclipse workspace path", name = "workingDirectory", required = false) 
-            String workingDirectory,
+            @P(description = "disk path, default current project", name = "workDir", required = false) 
+            String workDir,
             @P(description = "timeout in seconds, default=" + DEFAULT_TIMEOUT_S, required = false, name = "timeout") 
             Integer timeout,
-            @P(description = "max tail lines, default=" + DEFAULT_TAIL_LINES + "; 0 or -1 = all (hard cap " + MAX_OUTPUT_LENGTH + "); use this instead of `| tail -50`", required = false, name = "tailLines") 
-            Integer tailLines,
+            @P(description = "total output budget in chars (head + tail excerpt), default=" + OutputTrim.DEFAULT_MAX_CHARS + "; 0 or negative = default; no hard cap — use this instead of `| tail -50`", required = false, name = "maxChars") 
+            Integer maxChars,
             @P(description = "filter output lines (regex, literal fallback) — like `| grep`", name = "filter", required = false) 
             String filter) {
 
         ArgsUtil.requireNonBlank(command, "command");
         if (timeout == null) timeout = DEFAULT_TIMEOUT_S;
-        if (workingDirectory == null) {
+        Path defaultDir = defaultWorkingDir != null ? defaultWorkingDir.get() : null;
+        if (workDir == null) {
             // R3: default = supplier (active project) at call time; no supplier/no project = process CWD
-            Path defaultDir = defaultWorkingDir != null ? defaultWorkingDir.get() : null;
-            workingDirectory = (defaultDir != null ? defaultDir : Path.of(".")).toAbsolutePath().toString();
+            workDir = (defaultDir != null ? defaultDir : Path.of(".")).toAbsolutePath().toString();
         }
-        if (tailLines == null) tailLines = DEFAULT_TAIL_LINES;
+        // maxChars is a default, not a hard cap: null/<=0 falls back, larger values are allowed
+        if (maxChars == null || maxChars <= 0) maxChars = OutputTrim.DEFAULT_MAX_CHARS;
+        // the filter runs at read time, before the trim window, so it sees the whole stream
+        SearchQuery query = (filter == null || filter.isBlank()) ? null : SearchQuery.of(filter);
 
 
         if (confirmationProvider != null) {
-            String updatedCommand = confirmationProvider.confirm(command, workingDirectory);
+            String updatedCommand = confirmationProvider.confirm(command, workDir);
 
             if ("No".equalsIgnoreCase(updatedCommand)) {
                 return "Shell command execution denied!";
@@ -102,9 +100,10 @@ public class ShellTool extends AbstractTool {
             }
         }
 
-        Path effectiveDir = Path.of(workingDirectory).toAbsolutePath().normalize();
+        Path effectiveDir = Path.of(workDir).toAbsolutePath().normalize();
         if (!effectiveDir.toFile().isDirectory()) {
-            throw new IllegalArgumentException("workingDirectory is not a valid directory: " + workingDirectory);
+            throw new IllegalArgumentException("workDir is not a valid directory: " 
+                    + workDir + " - set default is/was: " + defaultDir);
         }
         // R3: disclose the effective (absolute + normalized) working dir — first line of every run result
         String cwdPrefix = "cwd=" + effectiveDir + System.lineSeparator();
@@ -121,7 +120,9 @@ public class ShellTool extends AbstractTool {
 
         // Shared with the reader thread; only read after reader.join() to
         // guarantee visibility (join() establishes a happens-before edge).
-        List<String> lines = new LinkedList<>();
+        // Writer = reader thread; the window caps every line before buffering (bounded memory).
+        OutputTrim.Window window = OutputTrim.window(maxChars);
+        int[] totalLines = new int[1];
         var stats = CallStats.start();
         try {
             onTool("Running: `" + command + "` in " + effectiveDir);
@@ -138,7 +139,10 @@ public class ShellTool extends AbstractTool {
                 try (var br = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                     String line;
                     while ((line = br.readLine()) != null) {
-                        lines.add(line);
+                        totalLines[0]++;
+                        if (query == null || query.matches(line)) {
+                            window.addLine(line);
+                        }
                     }
                 } catch (IOException e) {
                     // stream closed
@@ -149,25 +153,26 @@ public class ShellTool extends AbstractTool {
 
             boolean completed = process.waitFor(timeout, TimeUnit.SECONDS);
             if (!completed) {
-                process.destroyForcibly();
-                process.descendants().forEach(ProcessHandle::destroy); // kill grandchildren too
-                reader.join(3000); // ensure visibility of all buffered output
-                if (process.isAlive() && !process.waitFor(5, TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
-                }
+                // R4 (shell-tool.md): freeze the measured time until the timeout fired — the
+                // cleanup below must not inflate it; the total (incl. cleanup) stays in the suffix
+                String timedOutAfter = stats.duration();
+                // R4: snapshot the tree BEFORE the kill — afterwards the children are reparented
+                // out of the subtree and a surviving writer holds the pipe end open
+                var descendants = process.descendants().toList();
+                descendants.forEach(ProcessHandle::destroyForcibly); // children first
+                process.destroyForcibly(); // then the parent
+                process.waitFor(); // reap
+                reader.join(3000); // safety net only — the kill's EOF already unblocks the reader
 
                 String partial;
-                if (lines.isEmpty() && commandUsesShellTail(command)) {
-                    partial = "No output captured - the command pipes through `tail`/`head`, which buffers "
-                        + "everything internally and only flushes on normal completion. Killing the process "
-                        + "on timeout discarded that buffer. Use the `tailLines` parameter instead of "
-                        + "`| tail -N` so output is available even on timeout. Consider a longer timeout.";
+                if (totalLines[0] == 0 && commandUsesShellTail(command)) {
+                    partial = "Don't pipe through `tail`/`head` — the tool trims output itself (maxChars). Consider a longer timeout.";
                 } else {
-                    partial = formatOutput(lines, filter, tailLines).text();
+                    partial = buildOutput(window, query, totalLines[0]).text();
                 }
-                String result = cwdPrefix + "Command timed out after " + stats.duration()
+                String result = cwdPrefix + "Command timed out after " + timedOutAfter
                     + ". Partial output:\n" + partial + System.lineSeparator() + stats.suffix();
-                onTool("Command timed out (exit killed) - " + (lines.isEmpty() ? "no output" : lines.size() + " lines captured")
+                onTool("Command timed out (exit killed) - " + (totalLines[0] == 0 ? "no output" : totalLines[0] + " lines captured")
                     + " " + stats.suffix() + " " + StringUtil.charsSuffix(result));
                 return result;
             }
@@ -175,7 +180,7 @@ public class ShellTool extends AbstractTool {
             reader.join(2000);
             int exitCode = process.exitValue();
 
-            var output = formatOutput(lines, filter, tailLines);
+            var output = buildOutput(window, query, totalLines[0]);
             String resultStr = output.text();
             if (exitCode != 0) {
                 resultStr += System.lineSeparator() + "Exit code: " + exitCode;
@@ -184,19 +189,19 @@ public class ShellTool extends AbstractTool {
                     ? cwdPrefix + stats.suffix()
                     : cwdPrefix + resultStr + System.lineSeparator() + stats.suffix();
             onTool("Command finished (exit " + exitCode + ") reading " 
-                    + output.shown() + " lines ..." + " " + stats.suffix() + " " + StringUtil.charsSuffix(result));
+                    + output.shownLines() + " lines ..." + " " + stats.suffix() + " " + StringUtil.charsSuffix(result));
             return result;
 
         } catch (IOException e) {
             onProblem("Failed to run: " + command + " " + e.getMessage());
             return cwdPrefix + "Error executing command: " + e.getMessage()
                 + System.lineSeparator() + "Output so far:" + System.lineSeparator()
-                + formatOutput(lines, filter, tailLines).text();
+                + buildOutput(window, query, totalLines[0]).text();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             String result = cwdPrefix + "Command interrupted: " + e.getMessage()
                 + System.lineSeparator() + "Output so far:" + System.lineSeparator()
-                + formatOutput(lines, filter, tailLines).text();
+                + buildOutput(window, query, totalLines[0]).text();
             onTool("Stopped " + command + " " + stats.suffix() + " " + StringUtil.charsSuffix(result));
             return result;
         }
@@ -210,78 +215,29 @@ public class ShellTool extends AbstractTool {
 
 
     private static void prepareUserToolEnvironment(java.util.Map<String, String> env) {
-        var userEnv = userToolEnvironment();
+        var userEnv = UserToolEnvironment.current();
         if (!userEnv.pathPrefix().isEmpty()) {
             env.put("PATH", userEnv.pathPrefix() + File.pathSeparator + env.getOrDefault("PATH", ""));
         }
         if (userEnv.javaHome() != null) env.putIfAbsent("JAVA_HOME", userEnv.javaHome());
     }
 
-    private static UserToolEnvironment userToolEnvironment() {
-        var result = userToolEnvironment;
-        if (result == null) {
-            result = discoverUserToolEnvironment();
-            userToolEnvironment = result;
-        }
-        return result;
-    }
-
-    private static UserToolEnvironment discoverUserToolEnvironment() {
-        var home = System.getProperty("user.home");
-        var sdkmanJava = home + "/.sdkman/candidates/java/current";
-        var pathPrefix = Stream.of(
-                home + "/.sdkman/candidates/maven/current/bin",
-                sdkmanJava + "/bin",
-                "/opt/homebrew/bin",
-                "/usr/local/bin",
-                "/usr/bin",
-                "/bin",
-                "/usr/sbin",
-                "/sbin")
-            .filter(p -> Files.isDirectory(Path.of(p)))
-            .reduce((a, b) -> a + File.pathSeparator + b)
-            .orElse("");
-        return new UserToolEnvironment(pathPrefix, Files.isDirectory(Path.of(sdkmanJava)) ? sdkmanJava : null);
-    }
-
-    private record UserToolEnvironment(String pathPrefix, String javaHome) {}
-
 
     /**
-     * Applies the optional filter (regex-first, literal fallback) then the tail limit.
-     * When a filter is active the output is prefixed with a disclosure line naming the
-     * pattern, the search mode and how many of the total lines are shown (repo contract:
-     * every truncation/filter is named). {@code shown} = lines actually returned
-     * (after filter + tail).
+     * Builds the output body: the trimmed window text, prefixed with a filter disclosure when a
+     * filter is active (repo contract: every truncation/filter is named). The disclosure names
+     * the pattern, the search mode and how many of the total read lines are shown in the window.
      */
-    private static FormattedOutput formatOutput(List<String> allLines, String filter, Integer tailLines) {
-        var query = (filter == null || filter.isBlank()) ? null : SearchQuery.of(filter);
-        List<String> shownLines = (query == null) ? allLines : allLines.stream().filter(query::matches).toList();
-        Tail tail = tail(shownLines, tailLines);
-        String text = tail.text();
+    private static ShownOutput buildOutput(OutputTrim.Window window, SearchQuery query, int totalLines) {
+        OutputTrim.Result result = window.build();
+        String text = result.text();
         if (query != null) {
             String disclosure = "filter: " + query.query() + " (" + (query.literal() ? "literal" : "regex")
-                + ", showing " + tail.shown() + " of " + allLines.size() + " lines)";
+                + ", showing " + result.shownLines() + " of " + totalLines + " lines)";
             text = disclosure + System.lineSeparator() + text;
         }
-        return new FormattedOutput(text, tail.shown());
+        return new ShownOutput(text, result.shownLines());
     }
 
-    private record FormattedOutput(String text, int shown) {}
-
-    private record Tail(String text, int shown) {}
-
-    private static Tail tail(List<String> lines, Integer maxLines) {
-        int cap = (maxLines == null || maxLines <= 0) ? MAX_OUTPUT_LENGTH : Math.min(maxLines, MAX_OUTPUT_LENGTH);
-        if (lines.size() <= cap) {
-            return new Tail(String.join(System.lineSeparator(), lines), lines.size());
-        }
-        int skipped = lines.size() - cap;
-        var sb = new StringBuilder();
-        sb.append("... (").append(skipped).append(" lines skipped)").append(System.lineSeparator());
-        for (int i = skipped; i < lines.size(); i++) {
-            sb.append(lines.get(i)).append(System.lineSeparator());
-        }
-        return new Tail(sb.toString(), cap);
-    }
+    private record ShownOutput(String text, int shownLines) {}
 }
