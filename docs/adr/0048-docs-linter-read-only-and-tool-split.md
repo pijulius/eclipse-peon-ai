@@ -1,7 +1,7 @@
 # ADR-0048 — Docs-Linter: echt read-only, und Split in Vergabe- vs. Prüf-Tool
 
 **Status:** accepted (2026-09-15) · ergänzt [ADR-0047](0047-docs-linter-disk-only-single-root.md)
-**Fachdoc:** [docs-linter.md](../docs-linter.md) (R-DL-7, R-DL-8, R-DL-14, R-DL-15)
+**Fachdoc:** [docs-linter.md](../../org.sterl.llmpeon.core/docs/docs-linter.md) (R-DL-7, R-DL-8, R-DL-14, R-DL-15)
 
 ## Context
 
@@ -30,7 +30,7 @@ Zwei Fragen standen zur Entscheidung: (1) Wie kommt das Tool an die richtigen Ag
 ### 1. `reportPath` ersatzlos streichen — Clean Break
 
 Messung gegen das eigene Repo: Der Rückgabewert (`summary`) enthält **alle** Befunde einzeln mit
-`datei:zeile`, ungekappt — 5.942 Zeichen, 149 Zeilen, 35 Befunde. Der Datei-Report enthielt
+`datei:zeile`, ungekappt — kompakt genug, um als Tool-Result zu passen. Der Datei-Report enthielt
 ausschließlich **Aufbereitung** (Überschriften, Tabellen, Gruppierung nach Datei, Methodennamen,
 den Disk-Read-Hinweis), keine zusätzliche Information.
 
@@ -41,7 +41,7 @@ Context — die Datei ist ein Umweg, der einen zweiten Read kostet und nichts li
 werden zu müssen:
 
 - der Traversal-Angriffspfad auf `reportPath` (genau die Bug-Klasse, die
-  [write-path-validator.md](../write-path-validator.md) real hatte — und für die es hier **keinen
+  [write-path-validator.md](../../org.sterl.llmpeon.core/docs/write-path-validator.md) real hatte — und für die es hier **keinen
   Test** gab),
 - die `WriteValidator`-Kopplung je Agent (Da Dok/Da Thinka brauchten `DENY_ALL`, damit ein
   „read-only" Agent nicht doch schreibt),
@@ -102,7 +102,7 @@ Trotzdem die Fassade, aus zwei Gründen:
 > gefährlicher als keine, weil sie beim nächsten Anfassen als Fakt gelesen wird.
 >
 > **Ergänzung 2026-09-25 (Paul):** Mit der Regel „Tool-Namen, die Filter/Tests referenzieren,
-> werden als statische String-Konstanten gefasst" ([agent-tool-filter.md](../agent-tool-filter.md),
+> werden als statische String-Konstanten gefasst" ([agent-tool-filter.md](../../org.sterl.llmpeon.core/docs/agent-tool-filter.md),
 > R-TF-3) entfällt Grund 2 („stilles Umbenennen") weitgehend — Konstante und `@Tool(name=…)` haben
 > eine Quelle. Die Entscheidung (Fassade für `nextIds`) bleibt: Grund 1 (Präzedenz `PlanReadTool`)
 > trägt weiter, und eine bestehende Fassade wird nicht umgebaut. Neue Fälle entscheiden sich im

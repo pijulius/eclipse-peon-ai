@@ -9,7 +9,7 @@ Base: `AGENTS.md`. System prompt: `developer.md`.
 - langchain4j / CompletableFuture / JSON extra body → skill `repo-api-traps`
 - PDE / JDT / SWT / Preferences → skills `eclipse-dpe` / `eclipse-preferences`
 - Release / Update-Site / gh-pages / deploy / Version bump → skill `peon-release`
-- System-Prompts / Agent-Wiring / Docs-Übersicht → [docs/system-prompts.md](docs/system-prompts.md)
+- System-Prompts / Agent-Wiring / Docs-Übersicht → [docs/system-prompts.md](org.sterl.llmpeon.core/docs/system-prompts.md)
 
 
 ## Always-on rules (fail silently when violated — never trigger-gated)
@@ -26,5 +26,14 @@ Base: `AGENTS.md`. System prompt: `developer.md`.
   VERWAIST/UNBELEGT_ERLEDIGT blockiert, nicht erst der Review-Lauf.
 - **Never widen scope silently.** Fixes outside the released plan — even correct ones, even
   one-liners — get reported to the PO first. TABU lists in a plan are binding.
+- **Doc-Referenzen in Code/Javadoc tragen den Modul-Pfad** (`org.sterl.llmpeon.core/docs/x.md`,
+  `org.sterl.llmpeon/docs/x.md`) — Root-`docs/`-Pfade sind nach der Restrukturierung (2026-10-22)
+  tot für Feature-Docs; nur ADRs/Root-Docs bleiben dort. Referenzen gehören in Kommentare,
+  nie in String-Literale von Tests (C2-Gate des Docs-Restrukturierungs-Zyklus).
+- **Commit-Message trägt das Gate-Ergebnis** (Paul 2026-10-22): je Inkrement 1–2 Zeilen mit
+  dem Ergebnis der **tatsächlich gefahrenen** Gates (z. B. `Core Surefire 1252/0/0/0 · Lint
+  9 Findings = Baseline`) — kein Surefire gefahren → Surefire-Zeile weglassen, nie angerechnet.
+  Docs und ADRs tragen KEINE Test-/Mess-Zahlen — historische Werte sind stale und irreführen;
+  Evidenz lebt im Commit und ggf. in den memory-Tools, nie in `docs/**`.
 - Elegant, expressive modern Java (records, pattern matching, switch expressions, Lombok).
 - Skill-Footer beantworten; falschen Skill im selben Turn fixen.

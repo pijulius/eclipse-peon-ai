@@ -21,7 +21,7 @@ Aufgeräumt 2026-10-14 (Paul-Order): Gelöste → resolved-points.md, Wertloses 
   und zeigt `~`. **Rückversicherung:** Paul bestätigt Semantik + Tilde, oder wir nehmen
   `updateTokenCounter` zurück (dann R-CC-18 wieder auf dem alten, blinden Zähler).
 - ⏳ **Codegraph-Icon-Motiv:** Paul-Entscheid 2026-10-19 — Header zeigt die **Codegraph-Glyphe**
-  (Lupe gehört zur Suche); `2a238ad4` per Datei-Restore zurückgenommen, Doku (R-CG-8) angeglichen.
+  (Lupe gehört zur Suche); per Datei-Restore zurückgenommen, Doku (R-CG-8) angeglichen.
 - ⏳ **Codegraph-Windows-Fallback `cmd /c codegraph serve --mcp`:** von Jon entschieden und im
   Factory-Test gepinnt, aber **auf Windows ungetestet** (Maschine = macOS). Bei Pauls nächstem
   Windows-Lauf prüfen: startet der Server ohne absoluten Binary-Pfad?
@@ -87,8 +87,17 @@ Aufgeräumt 2026-10-14 (Paul-Order): Gelöste → resolved-points.md, Wertloses 
 - **Bekannte Kandidaten (beim Aufräumen per Grep vollständig inventarisieren, nicht nur diese):**
   `compact-lock.md` (Beleg-Tabelle), `codegraph.md` (Fakten-Bullet), `java-debugger-tool.md`,
   `compact.md` (Commit-Hashes in R-Zeilen), `tagged-results.md`, `bounded-caches.md`.
-- **Ablage:** Belege nach `peon-plan/` (z. B. `peon-plan/belege/<feature>.md`), sonst ersatzlos —
-  git hat die Historie.
+- **Stand 2026-10-23 (Docs-Slim-Zyklus):** Hashes, Surefire-/Test-Zahlen, Messwerte und
+  Beleg-Tabellen sind aus allen drei Docs-Bäumen entfernt (Da-Dok-Review: Hash-Grep 0 Treffer).
+  **Offen:** **Testnamen im Fließtext** (dieser Entscheidung folgend — überall, nicht nur die
+  Kandidatenliste unten) und Zeilen-Anker (`File.java:24`, gleiche Drift-Klasse).
+- **Ablage:** ersatzlos — Evidenz lebt in **Commit-Messages** (je Inkrement 1–2 Zeilen, nur
+  tatsächlich gefahrene Gates) + memory-Tools (Paul 2026-10-22: `nachweise/`/`peon-plan/belege`
+  verworfen); git hat die Historie.
+- ❓ **Linter-Guard gegen Drift (Da-Dok-Review 2026-10-23):** Evidenz-Muster (Commit-Hashes,
+  Test-Zahlen) als Linter-FindingType oder Gate-Grep über `docs/**`, damit der Bestand nicht
+  wieder schleichend wächst. Positiv nachweisen: eine Testzahl in ein teilnehmendes Doc setzen
+  ⇒ neue Regel muss rot.
 
 
 
@@ -109,7 +118,7 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   (b) `docs/index.md` + `docs/memory.md` + AGENTS.md **pro Turn** in Jons System-Context
   (`AgentContextComponent.java:130-140`, index.md wächst ungebremst), (c) Workspace-Memory-Snapshot
   ohne Cap. Frage: Caps an der Quelle oder bewusst offen, weil der Compact-Input budgetiert ist
-  ([compact-input-budget.md](compact-input-budget.md))?
+  ([compact-input-budget.md](../org.sterl.llmpeon.core/docs/compact-input-budget.md))?
 - ❓ **Workspace-Memory-Snapshot Vollkopie je `memoryAdd` (2026-09-23):** Snapshot-Key = entries-Hash
   (ADR-0032) — jede Mutation erzeugt eine frische Vollkopie aller Einträge bis zum Compact. By
   design, skaliert aber schlecht. Eigener Design-Punkt (inkrementeller Snapshot / Dedup /
@@ -184,8 +193,8 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   (Null-Byte als Cancel klassifiziert?), llama.cpp-Crash 3× buildWithDev-Abbruch (2026-09-20) —
   **Pauls Idee:** mindestens 1 Retry nach ~10s auch bei Connect-Level-Failures. R-CC-7-Seite:
   Compact-Fehler ans LLM + onProblem, Retry 1× nach 20s nur transient
-  ([compact.md](compact.md), Evidenz header-state-leak.md Fall 1+2).
-- ❓ **Header-State-Leak** ([header-state-leak.md](header-state-leak.md)): onProblem rendert den
+  ([compact.md](../org.sterl.llmpeon.core/docs/compact.md), Evidenz header-state-leak.md Fall 1+2).
+- ❓ **Header-State-Leak** ([header-state-leak.md](../org.sterl.llmpeon/docs/header-state-leak.md)): onProblem rendert den
   Header-State neu (🟢/Zähler/Working-Hint hängen nach Fehlerpfaden); IST-Messung vor der
   SOLL-Härtung offen (letzter gültiger Wert vs. aktiv falsch gesetzt).
 - ❓ **Live-Status im Retry-Backoff-Fenster (2026-09-10):** `StreamingBridge.onError` versteckt die
@@ -200,8 +209,8 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   (`EffectiveConnection.java:13`); Custom-Agent mit URL-Override läuft gegen Base-API-Semantik
   (bricht bei inkompatiblen APIs). Eigener Zyklus beschlossen, nach ModelConfigWidget. Offen bei
   Planung: Advanced-Feld, Frontmatter-Key `provider`, oder beides. Kontext:
-  [model-config-widget.md](model-config-widget.md) R-MCW-5.
-- **test_project-Fixture SOLL vs. IST (2026-09-27):** [test-setup.md](test-setup.md) sagt minimal,
+  [model-config-widget.md](../org.sterl.llmpeon/docs/model-config-widget.md) R-MCW-5.
+- **test_project-Fixture SOLL vs. IST (2026-09-27):** [test-setup.md](../org.sterl.llmpeon/docs/test-setup.md) sagt minimal,
   IST enthält u. a. `pom.xml`/`Dockerfile` (Herkunft unklar, kein Test-Output). Da-Mek-Empfehlung:
   behalten + Doc-SOLL anpassen, README-Zeile ergänzen (Zweck + `peon.test.project`-Override).
 - **Gelber Compact-Indikator 🟡 (2026-09-22):** zweiter Anzeige-Zustand `compacting` +
@@ -214,13 +223,13 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
 - **Docs-Linter ☠️-Status (2026-09-29):** DocParser kennt nur ✅/❌/🚧 (`DocParser.java:209-216`)
   — ein `####`-UC-Heading mit ☠️ wirft STATUS_FEHLT (Fall: default-inheritance.md UC-DEF-4/5/7
   mussten zu Fließtext degradiert werden). Kandidat: ☠️ als Info-Status.
-- **BDD-Test Compact-Hint-Fallback:** Regel gebaut (`29a341b`), Paul: „wann anders" — Backlog.
+- **BDD-Test Compact-Hint-Fallback:** Regel gebaut, Paul: „wann anders" — Backlog.
 
 ## ⏳ Mini-Cleanups / geparkt
 
 - **TrimService-Story — 🔒 gelöst 2026-10-17 (OutputTrim Slice 1):** gemeinsame Klasse gebaut
   (`OutputTrim`, core/shared) — Shell + Grep migriert, Details/Commits:
-  [output-trim-service.md](output-trim-service.md). Rest-Backlog unten.
+  [output-trim-service.md](../org.sterl.llmpeon.core/docs/output-trim-service.md). Rest-Backlog unten.
 - ❓ **Read-Tools-Rollout auf `OutputTrim` (2026-10-17):** `eclipseReadFile`/`diskReadFile` clampt
   Bereiche, aber nicht über die Trim-Komponente (Head/Tail-Disclosure) — Migration = eigenes
   Inkrement, kein Eile (Paul). Auch Kandidat: `LogExcerpt`/webFetch-Paging auf `OutputTrim`
@@ -238,9 +247,9 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   (e) LM Studio extra_body-Override, (f) OPEN_AI_OFFICIAL reasoningSummary=DETAILED, (g)
   custom-agent×OpenAI nur Signatur-Smoke. Plus: `ThinkModelMapping.Entry.off` geparst aber
   ungenutzt; `AiAgent.isThinkEnabled()` (deprecated Default) Sterben-Kandidat.
-- ⏳ **slf4j-simple — 🔒 gelöst 2026-10-17 (`8e6bcb54`):** Jar + Dependency aus Plugin-pom/
+- ⏳ **slf4j-simple — 🔒 gelöst 2026-10-17:** Jar + Dependency aus Plugin-pom/
   MANIFEST/build.properties entfernt — gebautes Bundle enthält exakt EINEN Provider
-  (`EclipseSlf4jProvider`), Plugin-Suite 352/0 ohne SLF4J-Warnung. **→ resolved-points.md.**
+  (`EclipseSlf4jProvider`), Plugin-Suite ohne SLF4J-Warnung. **→ resolved-points.md.**
   ⏳ Verbleibender Design-Punkt: slf4j-api ist **nicht OSGi-resolved**, sondern gebündelt
   (`lib/slf4j-api.jar`, aktuell 2.0.19 → 2.0.18 beim nächsten clean — Patch-Drift harmlos);
   Pauls Annahme eines `Require-Bundle`-Ranges `[2.0.0,3.0.0[` existiert im IST nicht. Falls
@@ -265,8 +274,8 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   `diskEditFile`:147, `diskInsertLines`:237) → `requireRegularFile(path, hint)`; exakte Meldungen
   1:1 (inkl. `Use searchDiskFiles`-Hint), `exists`-Varianten bewusst draußen. Core-Change →
   Jar-Ritual, nächster Core-Kontakt.
-- **SwtUtil.setExcluded-Extract — 🔒 gelöst 2026-10-15 (`3dfa784d`, Hyg2):** → resolved-points.md.
-- **Toter Code: `eclipseFindImplementations` — 🔒 gelöst 2026-10-15 (`b9a94195`, Hyg1):** → resolved-points.md.
+- **SwtUtil.setExcluded-Extract — 🔒 gelöst 2026-10-15, Hyg2:** → resolved-points.md.
+- **Toter Code: `eclipseFindImplementations` — 🔒 gelöst 2026-10-15, Hyg1:** → resolved-points.md.
 
 ## Sonstiges
 
@@ -328,7 +337,7 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   Pauls untracked WIP (`agent/tools/` — TABU, 🚧 Async-Review offen). PoDelegateTool-Teil
   (🗜 auf den compact*-Delegates) wäre machbar, halber Rollout = Inkonsistenz zwischen beiden
   Delegate-Tools. Paul entscheidet: PoDelegate-Teil vorab bauen, oder S3 komplett nach
-  AgentsTool-Merge. Kontext: [icons.md](icons.md).
+  AgentsTool-Merge. Kontext: [icons.md](../org.sterl.llmpeon/docs/icons.md).
 
 
 ## Codegraph-Toolset-Erweiterung (2026-10-17, Paul-Frage — ❓ Entscheidung ausstehend)
@@ -347,13 +356,13 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
 
 ## Codegraph-Smoke (2026-10-18, Paul) — Befunde
 
-- 🔒 **Zwei `serve --mcp`-Prozesse — gelöst (2026-10-18, `fe583895`):** war ein **Bug**, kein Design:
+- 🔒 **Zwei `serve --mcp`-Prozesse — gelöst (2026-10-18):** war ein **Bug**, kein Design:
   jede Registry baute ihren eigenen `McpService` (je Server ein Prozess). Fix nach
   [ADR-0069](adr/0069-shared-mcp-connection-per-server.md): der Connection-Service **besitzt** den
   `McpService` (`connect()` genau einmal, einziger Schließer), alle Registries adoptieren ihn
   (`ToolService.adoptMcpGroup`); `disconnectMcp` detacht nur noch. Gilt für Codegraph **und**
   User-MCP; der Leer-Pfad (Server-Liste wird leer) schließt ebenfalls, Status sagt jetzt ehrlich
-  „MCP disconnected (no servers configured)". Gates: Core 1175/0, OSGi 386/0. Offen bleibt nur der
+  „MCP disconnected (no servers configured)". Offen bleibt nur der
   `McpService.connect()`-Rollback im Core als testlos (siehe unten).
 - ❓ **`codegraph` fehlt in Pauls Tool-Auswahl** (Agent-Tool-Config), obwohl verbunden
   (`Running MCP: codegraph_explore`). Kein struktureller MCP-Ausschluss (`ToolService.activeNames:111`,
@@ -391,4 +400,4 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
   Kontext-Anzeige (Compact-Button used/max) die gefährliche Richtung (Overflow-Risiko), zu hoch nur kosmetisch.
 - **Rückversicherung:** Paul hat /3 vorgeschlagen („nicht so wichtig, mehr Info") — Umsetzung im
   Nachtzyklus autonom; widerspricht Paul, zurück auf ×2/7 (Änderung ist eine Konstante). **Umgesetzt
-  `fbe2866f` + Zentralisierung `tokensToChars` `3199f732` (Open-Q1).**
+  (Open-Q1).**
