@@ -22,7 +22,6 @@ import org.sterl.llmpeon.parts.ai.CodegraphContextItem;
 import org.sterl.llmpeon.parts.shared.EclipseUtil;
 import org.sterl.llmpeon.parts.shared.IoUtils;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
-import org.sterl.llmpeon.parts.tools.PlanTool;
 import org.sterl.llmpeon.parts.tools.memory.WorkspaceMemoryTool;
 import org.sterl.llmpeon.poagent.AiPoAgent;
 import org.sterl.llmpeon.scaffold.AiScaffoldAgent;
@@ -39,6 +38,8 @@ public class AgentContextComponent {
     private static final ILog LOG = Platform.getLog(AgentContextComponent.class);
 
     private final Supplier<IProject> projectRef;
+    /** R-PT-3: the plan as the workspace currently sees it — refreshed by the supplier, never a bare exists(). */
+    private final Supplier<IFile> planFile;
     private final WorkspaceMemoryTool workspaceMemoryTool;
     private final UserContext userContext;
     private final AiScaffoldAgent scaffoldAgent;
@@ -55,6 +56,7 @@ public class AgentContextComponent {
     private volatile SimpleContextItem handoffLine;
 
     public AgentContextComponent(Supplier<IProject> projectRef,
+            Supplier<IFile> planFile,
             WorkspaceMemoryTool workspaceMemoryTool,
             UserContext userContext,
             AiScaffoldAgent scaffoldAgent,
@@ -64,6 +66,7 @@ public class AgentContextComponent {
             Supplier<List<AiAgent>> agents,
             CodegraphContextItem codegraph) {
         this.projectRef = projectRef;
+        this.planFile = planFile;
         this.workspaceMemoryTool = workspaceMemoryTool;
         this.userContext = userContext;
         this.scaffoldAgent = scaffoldAgent;
@@ -110,6 +113,18 @@ public class AgentContextComponent {
         if (this.plan == null || !this.plan.exists()) return "";
         return "Plan: " + JdtUtil.pathOf(plan) + System.lineSeparator() + "---" + System.lineSeparator() + System.lineSeparator()
             + IoUtils.readString(plan);
+    }
+
+    /**
+     * The plan body exactly as the file holds it — {@code ""} without a reference, without a file and
+     * for an empty file. R-PT-4 (org.sterl.llmpeon/docs/plan-tool.md): this raw view is what decides
+     * whether a handoff has a plan; {@link #readPlan()} prefixes a header and would make even an
+     * empty overview.md look like one.
+     */
+    public String planContent() {
+        if (this.plan == null || !this.plan.exists()) return "";
+        var content = IoUtils.readString(this.plan);
+        return content == null ? "" : content;
     }
 
     /**
@@ -202,28 +217,29 @@ public class AgentContextComponent {
         }
     }
 
+    /**
+     * R-PT-3: the file comes from the injected supplier — the same refreshed view the query paths
+     * use — so a plan written past the workspace tree by the disk tools is offered like any other.
+     */
     private void appendPlanReference(LinkedList<ContextItem> result) {
-        var project = projectRef.get();
-        if (project == null) return;
-
-        final var planFile = project.getFile(PlanTool.OVERVIEW_FILE);
-        if (planFile == null || !planFile.exists()) return;
+        final var visible = planFile.get();
+        if (visible == null) return;
 
         result.add(new ContextItem() {
             @Override
             public String label() {
-                return "Plan reference " + JdtUtil.pathOf(planFile);
+                return "Plan reference " + JdtUtil.pathOf(visible);
             }
             @Override
             public String dedupKey() {
-                if (!planFile.exists()) return null;
-                return TaggedResult.PREFIX + "context: plan " + JdtUtil.pathOf(planFile);
+                if (!visible.exists()) return null;
+                return TaggedResult.PREFIX + "context: plan " + JdtUtil.pathOf(visible);
             }
             @Override
             public TaggedResult render() {
-                if (!planFile.exists()) return null;
-                return new TaggedResult("context: plan " + JdtUtil.pathOf(planFile),
-                        "Existing plan found: " + JdtUtil.pathOf(planFile));
+                if (!visible.exists()) return null;
+                return new TaggedResult("context: plan " + JdtUtil.pathOf(visible),
+                        "Existing plan found: " + JdtUtil.pathOf(visible));
             };
         });
     }

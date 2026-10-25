@@ -25,6 +25,8 @@ import org.sterl.llmpeon.agent.model.TaggedResult;
 import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
+import org.sterl.llmpeon.compact.CompactConstants;
+import org.sterl.llmpeon.compact.CompactFeedback;
 import org.sterl.llmpeon.model.CompactResult;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.SimpleContextItem;
@@ -364,7 +366,8 @@ class AbstractAgentTest {
         return Clock.fixed(Instant.parse("2026-09-23T14:32:00Z"), ZoneOffset.UTC);
     }
 
-    /** compactContext clears memory, invalidates systemMessage, restores turn context, then adds summary. */
+    /** compactContext clears memory, invalidates systemMessage, restores turn context, then re-seeds
+     *  the one marker-block message (R-CC-9). */
     @Test
     void test_compactContext_clearsMemoryAndRestoresTurnContext() {
         // GIVEN
@@ -384,17 +387,19 @@ class AbstractAgentTest {
         // WHEN
         agent.compact(monitor -> {});
 
-        // THEN — memory cleared, turn context restored, summary added
+        // THEN — memory cleared and re-seeded to exactly ONE message: the turn context first, the
+        // marker block (marker + summary) as its last TextContent
         var memory = agent.getMemory().getCopy();
-        assertThat(memory).hasSize(2);
+        assertThat(memory).hasSize(1);
         assertThat(memory.get(0)).isInstanceOf(UserMessage.class);
         assertThat(ChatMessageUtil.toString(memory.get(0))).contains("turn context item");
-        assertThat(memory.get(1)).isInstanceOf(AiMessage.class);
-        assertThat(ChatMessageUtil.toString(memory.get(1))).contains("compressed summary");
+        assertThat(UserMessages.lastText((UserMessage) memory.get(0)))
+                .startsWith(CompactConstants.REINSERT_MARKER)
+                .endsWith("compressed summary");
     }
 
-    /** R16 (sharpened): a compact leaves exactly 2 messages — a direct re-compact is a no-op
-     *  with no second LLM call (mutation guard: guard back to < 2 ⇒ second call fires the LLM). */
+    /** A compact leaves exactly 1 message — a direct re-compact is a no-op with no second LLM call
+     *  (mutation guard: MIN_COMPACT_MESSAGES back to 1 ⇒ the second call fires the LLM). */
     @Test
     void compact_secondCallDirectlyAfterCompact_isNoop() {
         // GIVEN — 3 messages so the first compact actually runs
@@ -413,11 +418,10 @@ class AbstractAgentTest {
         // AND — second compact directly after
         var second = agent.compact(monitor -> {});
 
-        // THEN — first compacted to exactly 2 (Session-compacted user + summary), second is a no-op
+        // THEN — first compacted to exactly 1 (the marker block + summary), second is a no-op
         assertThat(first.status()).isEqualTo(CompactResult.Status.COMPACTED);
-        assertThat(afterFirst).hasSize(2);
+        assertThat(afterFirst).hasSize(1);
         assertThat(afterFirst.get(0)).isInstanceOf(UserMessage.class);
-        assertThat(afterFirst.get(1)).isInstanceOf(AiMessage.class);
         assertThat(second.status()).isEqualTo(CompactResult.Status.SKIPPED_SMALL);
         assertThat(agent.getMemory().getCopy()).isEqualTo(afterFirst);
         // AND — exactly one LLM call (the first compact's compressor), none for the no-op
@@ -479,6 +483,91 @@ class AbstractAgentTest {
 
         // THEN — the flag is released by the finally
         assertThat(agent.isWorking()).isFalse();
+    }
+
+    // UC-CT-6
+    @Test
+    void isCompactingDuringCompressorCall() {
+        // GIVEN — 3 messages so the compact really runs
+        var agentRef = new AtomicReference<AiDevAgent>();
+        var compactingDuringCompressor = new AtomicReference<Boolean>();
+        var workingDuringCompressor = new AtomicReference<Boolean>();
+        var config = LlmConfig.builder().model("mock").build();
+        var mockModel = streamMock.buildMock(r -> {
+            compactingDuringCompressor.set(agentRef.get().isCompacting());
+            workingDuringCompressor.set(agentRef.get().isWorking());
+            return ChatResponse.builder().aiMessage(AiMessage.aiMessage("compressed summary")).build();
+        });
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+        agentRef.set(agent);
+        agent.addMessage(UserMessage.from("m1"));
+        agent.addMessage(AiMessage.from("m2"));
+        agent.addMessage(UserMessage.from("m3"));
+
+        // WHEN
+        var compacted = agent.compact(monitor -> {});
+
+        // THEN — own Compact-Status for the duration of the compressor call (R-CT-4), and the
+        // working lock (R-CT-1) untouched by it
+        assertThat(compacted.status()).isEqualTo(CompactResult.Status.COMPACTED);
+        assertThat(compactingDuringCompressor.get()).as("compacting during the compressor call").isTrue();
+        assertThat(workingDuringCompressor.get()).as("still working, too — the lock stays").isTrue();
+        assertThat(agent.isCompacting()).as("cleared after the compact").isFalse();
+    }
+
+    // UC-CT-6
+    /**
+     * Companion pin to {@link #isCompactingDuringCompressorCall}: alone it would be green without
+     * the feature (a compact that never flags has nothing to clear). Together the two pin the
+     * finally-clear — the mutation here is dropping that finally, which turns this test red.
+     */
+    @Test
+    void compactingClearedOnFailedCompact() {
+        // GIVEN — 3 messages; the compressor call throws
+        var config = LlmConfig.builder().model("mock").build();
+        var mockModel = streamMock.buildMock(r -> {
+            throw new IllegalStateException("compressor exploded");
+        });
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+        agent.addMessage(UserMessage.from("m1"));
+        agent.addMessage(AiMessage.from("m2"));
+        agent.addMessage(UserMessage.from("m3"));
+
+        // WHEN — the compact fails
+        assertThatThrownBy(() -> agent.compact(monitor -> {}))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("compressor exploded");
+
+        // THEN — no dangling 🟡: the agent is usable again (R-CT-4)
+        assertThat(agent.isCompacting()).isFalse();
+    }
+
+    // UC-CT-6
+    /**
+     * The R16 skip must never show a Compact-Status: the 🟡 flag is set only behind the
+     * MIN_COMPACT_MESSAGES guard. Mutation guard: setting the flag before the guard return (so no
+     * clear runs for the skip) turns the roster assertion red.
+     */
+    @Test
+    void skipDoesNotFlagCompacting() {
+        // GIVEN — 2 messages, the state right after a compact: the guard returns before any LLM call
+        var agent = new AiDevAgent(new ConfiguredChatModel(LlmConfig.builder().model("mock").build(),
+                streamMock.buildMock(r -> ChatResponse.builder()
+                        .aiMessage(AiMessage.aiMessage("must not be called")).build())),
+                new ToolService());
+        agent.addMessage(UserMessage.from("m1"));
+        agent.addMessage(AiMessage.from("m2"));
+
+        // WHEN
+        var result = agent.compact(monitor -> {});
+
+        // THEN — skipped, no LLM call, and no 🟡 anywhere (flag nor roster row)
+        assertThat(result.status()).isEqualTo(CompactResult.Status.SKIPPED_SMALL);
+        assertThat(streamMock.getCallCount()).isZero();
+        assertThat(agent.isCompacting()).isFalse();
+        assertThat(AiAgentStatusModel.rows(List.of(new NamedAgent("Da Mek", agent))))
+                .as("a skipped compact never renders a Compact-Status")
+                .noneMatch(AiAgentStatusModel.Entry::compacting);
     }
 
     // UC-CT-2
@@ -549,6 +638,37 @@ class AbstractAgentTest {
         assertThat(compactCalls.get()).isEqualTo(1);
         assertThat(workingDuringTurnCall.get()).isTrue();
         assertThat(agent.isWorking()).isFalse();
+    }
+
+    /**
+     * Flush-point pin for the deferred chat reset (R-CT-7): {@code onCallStart} must fire AFTER the
+     * turn's message entered the memory — it is the event a view rebuilds on, and a rebuild before
+     * the add loses the question the user just sent. Mutation guard: moving the emission back in
+     * front of the memory add leaves the memory empty here and turns this red.
+     */
+    @Test
+    void onCallStartSeesUserMessageInMemory() {
+        // GIVEN — a monitor reading the agent's memory from inside onCallStart
+        var config = LlmConfig.builder().model("mock").build();
+        var mockModel = streamMock.buildMock(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("OK")).build());
+        var agentRef = new AtomicReference<AbstractAgent>();
+        var userMessagesAtCallStart = new ArrayList<String>();
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onCallStart(String userMessage) {
+                userMessagesAtCallStart.addAll(extractUserTexts(agentRef.get().getMemory().getCopy()));
+            }
+        };
+        var agent = new AiDevAgent(new ConfiguredChatModel(config, mockModel), new ToolService());
+        agentRef.set(agent);
+
+        // WHEN — one turn
+        agent.call("the fresh question", monitor);
+
+        // THEN — the event sees the fresh question in the memory: rebuilding from the memory at this
+        // point cannot lose it
+        assertThat(userMessagesAtCallStart).containsExactly("the fresh question");
     }
 
     // UC-CT-4
@@ -694,8 +814,9 @@ class AbstractAgentTest {
 
         // THEN — the pre-turn gate did not fire (3 is not > 3): only the turn's LLM call …
         assertThat(callCount.get()).isEqualTo(1);
-        // AND — no compact event line …
-        assertThat(toolLines).noneMatch(l -> l.contains("Pre-turn compact"));
+        // AND — no compact line of any kind (gate did not fire) …
+        assertThat(toolLines).noneMatch(l -> l.contains(CompactFeedback.START_PREFIX)
+                || l.contains(CompactFeedback.END_MARKER));
         // AND — the fresh message and the full history are untouched in the memory
         assertThat(agent.hasUserText("test")).isTrue();
         assertThat(memory.size()).isEqualTo(5); // 3 seeded + the fresh message + the turn's AI response
@@ -736,8 +857,9 @@ class AbstractAgentTest {
 
         // THEN — the pre-turn gate is off (budget <= 0): only the turn's LLM call …
         assertThat(callCount.get()).isEqualTo(1);
-        // AND — no compact event line …
-        assertThat(toolLines).noneMatch(l -> l.contains("Pre-turn compact"));
+        // AND — no compact line of any kind (gate did not fire) …
+        assertThat(toolLines).noneMatch(l -> l.contains(CompactFeedback.START_PREFIX)
+                || l.contains(CompactFeedback.END_MARKER));
         // AND — the fresh message and the full history are untouched in the memory
         assertThat(agent.hasUserText("test")).isTrue();
         assertThat(memory.size()).isEqualTo(6); // 4 seeded + the fresh message + the turn's AI response
@@ -766,14 +888,15 @@ class AbstractAgentTest {
         // WHEN — compress triggers restoreTurnContext
         agent.compact(monitor -> {});
 
-        // THEN — turn context appears only once (skipped on restore), plus compressed AI message
+        // THEN — turn context appears only once (skipped on restore), in the one re-seeded message
         var memory = agent.getMemory().getCopy();
         List<String> userTexts = extractUserTexts(memory);
         assertThat(userTexts).hasSize(1);
         assertThat(userTexts.get(0)).contains("unique turn context");
-        // AND the AI summary is present
-        assertThat(memory).anyMatch(m -> m instanceof AiMessage ai
-                && ChatMessageUtil.toString(ai).contains("compressed"));
+        // AND the summary rides in that same message behind the marker (R-CC-9)
+        assertThat(UserMessages.lastText((UserMessage) memory.get(0)))
+                .startsWith(CompactConstants.REINSERT_MARKER)
+                .endsWith("compressed");
     }
 
     /** compressContext restores only turnContextSupplier (no double-restore). */
@@ -795,16 +918,18 @@ class AbstractAgentTest {
         // WHEN
         agent.compact(monitor -> {});
 
-        // THEN — memory has the shimmed item (via turnContextSupplier), resume message, AI summary
+        // THEN — memory has ONE message: the shimmed item (via turnContextSupplier) plus the marker
+        // block carrying the summary
         var memory = agent.getMemory().getCopy();
+        assertThat(memory).hasSize(1);
         List<String> userTexts = extractUserTexts(memory);
-        assertThat(userTexts).hasSize(1);
         var mergedUserText = userTexts.get(0);
         assertThat(mergedUserText).contains("AGENTS.md: Rule 1 — be concise");
-        assertThat(mergedUserText).contains("Session compacted");
-        // AND the AI summary is present
-        assertThat(memory).anyMatch(m -> m instanceof AiMessage ai
-                && ChatMessageUtil.toString(ai).contains("compressed summary"));
+        assertThat(mergedUserText).contains(CompactConstants.REINSERT_MARKER);
+        // AND the summary rides behind the marker in the same message (R-CC-9)
+        assertThat(UserMessages.lastText((UserMessage) memory.get(0)))
+                .startsWith(CompactConstants.REINSERT_MARKER)
+                .endsWith("compressed summary");
     }
 
     /** compressContext skips duplicates in turnContextSupplier (contains-check). */
@@ -830,17 +955,18 @@ class AbstractAgentTest {
         // WHEN
         agent.compact(monitor -> {});
 
-        // THEN — context item appears only once (skipped on restore), plus resume message
+        // THEN — context item appears only once (skipped on restore), in the one re-seeded message
         var memory = agent.getMemory().getCopy();
+        assertThat(memory).hasSize(1);
         List<String> userTexts = extractUserTexts(memory);
-        assertThat(userTexts).hasSize(1);
         var mergedText = userTexts.get(0);
         // Count occurrences — should appear exactly once
         assertThat(countOccurrences(mergedText, "existing turn context")).isOne();
-        assertThat(mergedText).contains("Session compacted");
-        // AND the AI summary is present
-        assertThat(memory).anyMatch(m -> m instanceof AiMessage ai
-                && ChatMessageUtil.toString(ai).contains("compressed"));
+        assertThat(mergedText).contains(CompactConstants.REINSERT_MARKER);
+        // AND the summary rides behind the marker in the same message (R-CC-9)
+        assertThat(UserMessages.lastText((UserMessage) memory.get(0)))
+                .startsWith(CompactConstants.REINSERT_MARKER)
+                .endsWith("compressed");
     }
 
     private int countOccurrences(String text, String substring) {

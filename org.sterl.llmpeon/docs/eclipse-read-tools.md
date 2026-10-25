@@ -274,7 +274,37 @@ Modell sieht den Fehler und korrigiert.
 - **Pfad-Modi:** Eclipse-relative Pfade sind **projekt-relativ** oder **workspace-relativ** —
   workspace-relativ heißt `/ProjectName/...` bzw. beginnt mit dem (Modul-)Projekt-Namen
   (z. B. `org.sterl.llmpeon.core/...`).
-- **Miss-Fall:** ehrliches `No eclipse file found for <path>` — bewusst **ohne** Projekt-Disclosure
-  (Paul, 2026-10-16: „wenn der Pfad falsch war, können wir nicht helfen — nicht überengineieren").
-- Status: Semantik als Paul-WIP im Tree, **noch ungetestet/committed ausstehend** (`volatile
-  currentProject` = Thread-Safety-Fix für Background-Jobs).
+- **Miss-Fall:** ehrliches `No eclipse file found for <path>` **mit Diagnose-Hint** (Grund benennen:
+  Projekt geschlossen / auf Disk nicht im Baum → `eclipseRefreshProject` / unbekanntes Projekt) —
+  [workspace-nesting.md](workspace-nesting.md) R-WN-5 (2026-10-24, T-5/I-4). **Supersedes** die
+  Paul-Entscheidung 2026-10-16 „bewusst ohne Projekt-Disclosure": die False-Negative-Klasse
+  (Agent glaubt „existiert nicht") hat sich als teurer erwiesen als die Extra-Zeile; Pauls
+  Triage T-5 forderte die Diagnose ausdrücklich.
+- Resolution-Reihenfolge heute (R-WN-4, 2026-10-24): **1) selektiertes Projekt** → **2) Workspace-Root**
+  → **3) offene Projekte** (inkl. `src/`-Fallback, ⏳ Entfernung) → **4) Disk-Lokation Last-Resort**
+  (`resolveByLocation`, Disclosure `resolved via <pfad>` bei abweichender Auflösung).
+- Status: ✅ gebaut (2026-10-24, T-5): R-WN-4/R-WN-5 umgesetzt, `volatile currentProject` =
+  Thread-Safety-Fix für Background-Jobs. Die Auflösung semantisch final; der ⏳-Punkt `src/`-Fallback
+  bleibt in workspace-nesting.md geführt.
+
+## R10 ✅ done (2026-10-25, E2E-Triage B1) — `eclipseList`: Refresh vor dem Listing
+
+**IST (E2E-Befund, `ai-e2e-test/search-agent-e2e-issues.md` Issue 1):** `eclipseList` mappete den
+Workspace-Resource-Tree ohne Refresh — eine frisch auf der Platte erzeugte Datei fehlte
+stillschweigend, während `eclipseSearchFiles`/`eclipseGrepFiles`/`eclipseReadFile` sie finden
+(Familien-Bruch + False Negative).
+
+**SOLL:** Vor dem `members()`-Mapping wird der gelistete Container mit `refreshLocal(DEPTH_ONE)`
+aktualisiert — DEPTH_ONE, weil die Liste nicht-rekursiv ist. Ein Refresh-Fehler ist nie still:
+Disclosure-Zeile in der Ausgabe **und** `onProblem` mit Pfad und Ursache. Der Refresh läuft über
+einen injizierbaren Seam (Muster `PlanFileView`), Cancellation wird ungefangen durchgereicht.
+
+**WEIL:** „A tool must never lie" — eine veraltete Liste liest sich als „existiert nicht", die
+teuerste Fehlerklasse des Repos. ADR-0038 (Refresh nur im Leerfall) gilt für die Such-Tools;
+`eclipseList` refresht **immer**, weil sein Ergebnis die Behauptung „das ist der Inhalt" trägt.
+
+- GIVEN eine Datei wurde per java.io in den Projektordner geschrieben (am Workspace-Tree vorbei),
+  WHEN `eclipseList` auf den Ordner läuft, THEN ist die Datei gelistet
+  → `eclipseListSeesFileWrittenOutsideEclipse` (PDE)
+- GIVEN der Refresh schlägt fehl, WHEN `eclipseList` läuft, THEN Disclosure + onProblem, nie eine
+  still veraltete Liste → Mutation „stiller Refresh-Fehler" rot (PDE-Suite)

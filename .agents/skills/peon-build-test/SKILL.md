@@ -1,6 +1,6 @@
 ---
 name: peon-build-test
-description: llmpeon repo build & test procedure — core→plugin jar trap (reactor vs ~/.m2 store model, when install is required), plugin/OSGi test runs, headless Tycho, stale artifacts (bin/, m2e, Lombok), dependency whitelist ritual, Surefire number summing, accepted warning list in known-benign-warnings.md.
+description: llmpeon repo build & test procedure — core→plugin jar trap (reactor vs ~/.m2 store model, when install is required), plugin/OSGi test runs (persistent agents only via getAgents(), not get(name)), headless Tycho, stale artifacts (bin/, m2e, Lombok), dependency whitelist ritual, Surefire number summing, accepted warning list in known-benign-warnings.md.
 ---
 
 # Build & test — llmpeon repo (migrated from AGENTS-DEV.md, 2026-10-20)
@@ -10,6 +10,10 @@ description: llmpeon repo build & test procedure — core→plugin jar trap (rea
 - Full build at the repo root (`llmpeon-parent`): `mvn clean verify`; `install` only when `~/.m2` must
   hold the modules (route B below). Maven is for code/artefact changes — afterwards refresh +
   clean-build the Eclipse projects.
+- **Eclipse project name for core is `llmpeon-core`, not `org.sterl.llmpeon.core`** —
+  `eclipseBuildProject`/`eclipseRenameResource` need `/llmpeon-core/...`. The neighbouring modules *do*
+  carry their artifact name (`org.sterl.llmpeon`, `org.sterl.llmpeon.test`), so the pattern is not
+  guessable; Maven still uses `-pl org.sterl.llmpeon.core`.
 
 ## Core → Plugin jar trap (the big one)
 
@@ -50,12 +54,22 @@ description: llmpeon repo build & test procedure — core→plugin jar trap (rea
   `mvn -o -B clean test -pl org.sterl.llmpeon.core -Dtest='ClassA,ClassB'` runs exactly those classes;
   no reactor needed. KEEP `clean` — without it the m2e auto-build/Lombok trap below yields phantom
   testCompile failures.
+- **Der ganze Reactor ist der billige Gate (hit 2026-10-25):** `mvn -o -B clean verify` offline dauert ~50 s
+   (Target-Platform gecacht) und ist damit billiger als jede Scoped-Variante. Wer trotzdem scoped
+   (`-pl … -am -Dtest=<Klasse>`), muss für Core `-Dsurefire.failIfNoSpecifiedTests=false` mitgeben —
+   sonst bricht Core mit „No tests matching pattern".
 
 ## Plugin tests (OSGi, JUnit 4)
 
 - `org.sterl.llmpeon.test` runs via the Eclipse test runner. A NEW test class needs the user's manual
   workspace approval once and may time out if he is not watching → prefer running the whole plugin
   test project, which is already approved.
+- **`usePluginTest` is a real boolean (hit 2026-10-25):** `eclipseRunJavaTests` rejects the string
+  `"True"` with "is not convertable to java.lang.Boolean" — pass `true`.
+- **A single-class PDE run of an ALREADY-approved class is trust-free (hit 2026-10-25):**
+  `testClassName=<existing class>` finishes in ~6 s and is enough to prove a red/green cycle; the
+  manual workspace approval above applies only to a NEW test class — so adding a test method to an
+  existing class is how to get a fast red test without waiting for the user.
 - Before EVERY test run: `eclipseBuildProject` on all changed projects — stale bundle classes in `bin/`
   cause `ClassNotFoundException` / unresolved-compilation failures, and stale Surefire reports under
   `target/` mislead result reading.
@@ -64,6 +78,18 @@ description: llmpeon repo build & test procedure — core→plugin jar trap (rea
   not a Maven dependency) → stale local-p2 host → phantom `NoSuchMethodError` on green code
   (2026-09-17 R-SEL-4, `UserContext.setTextSelection`). Correct: `-pl
   org.sterl.llmpeon,org.sterl.llmpeon.test -am verify`.
+- **SWT tests are skipped headless (hit 2026-10-23):** Tycho-surefire runs without a workbench
+  display, so every `AbstractSwtUiTest` subclass is `Assume`-skipped (visible as ~50 skips). A widget
+  test is therefore only *compiled* by `mvn … verify` — run it once with `eclipseRunJavaTests` against
+  the live workbench and prove its mutation there; never count headless skips as coverage.
+- **Persistent agents are invisible to `getAgent(name)` (hit 2026-10-24, Story 3):** `AgentService.get(name)`
+  reads only the `agents` map of *loaded custom* agents (`AgentService.java:227-230`), never `persistentAgents`
+  — the built-ins (Scaffold, PO, Dev/Plan/Review) come back `Optional.empty()`, which reads like "not wired"
+  and invites a false STOP-AND-ASK. Reach them through the public list, which unions both maps
+  (`AgentService.java:119-121`) — `getAgents().stream().filter(AiScaffoldAgent.class::isInstance)
+  .findFirst().orElseThrow()`. Evidence: `PeonAiServiceTest.scaffoldWriteValidator_acceptsHomeUserAgentsRoot`
+  (`d9c703cd`) — the first attempt via `get(name)` was a non-finding, the `getAgents()` filter is what proves
+  the wiring.
 - **Maven Surefire is the ground truth for test numbers**, not `eclipseRunJavaTests` — the Eclipse
   runner counts higher (parameterized artefacts) and has repeatedly produced wrong report numbers.
 

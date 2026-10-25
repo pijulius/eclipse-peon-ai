@@ -22,6 +22,7 @@ import org.sterl.llmpeon.agent.AiReviewAgent;
 import org.sterl.llmpeon.agent.NamedAgent;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
+import org.sterl.llmpeon.compact.CompactFeedback;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.context.SimpleContextItem;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
@@ -264,8 +265,9 @@ class PoDelegateToolTest {
         assertThat(tool.getReviewSlave().getMemory().containsUserMessage("second review")).isFalse();
     }
 
-    /** R16 (sharpened): with exactly 2 messages (the deterministic post-compact state) compactDev
-     *  is an honest no-op — "Nothing to compact (2 messages)", no "compacted.", no LLM call. */
+    /** R16 (sharpened): below MIN_COMPACT_MESSAGES compactDev is an honest no-op —
+     *  "Nothing to compact (2 messages)", no "compacted.", no LLM call. A successful compact leaves
+     *  only 1 message (R-CC-9), so the guard also covers the direct re-compact case. */
     @Test
     void compactDev_skipsWithHonestMessage_whenSlaveBelowThreeMessages() {
         // GIVEN — Da Mek with exactly 2 messages
@@ -482,9 +484,50 @@ class PoDelegateToolTest {
 
         // THEN — the 0.7 pre-delegation rule compacted the real slave (old history gone)
         assertThat(reply).contains("SLAVE REPLY");
-        assertThat(toolLines).anyMatch(l -> l.contains("auto-compact before delegation"));
+        // AND — R-CT-8: it shows as the uniform start/end pair (no "auto-compact before delegation" line)
+        assertThat(toolLines).anyMatch(l -> l.startsWith(CompactFeedback.START_PREFIX + "Peon-Dev"));
+        assertThat(toolLines.stream().filter(l -> l.contains(CompactFeedback.END_MARKER)).toList()).hasSize(1);
+        assertThat(toolLines).noneMatch(l -> l.contains("auto-compact before delegation"));
         assertThat(memory.containsUserMessage("seed 0")).isFalse();
         // AND — no compact came from the removed per-agent pre-turn gate (compactFactor)
         assertThat(toolLines).noneMatch(l -> l.contains("Auto Compact before execution"));
+    }
+
+    // UC-CT-13
+    @Test
+    void compactDevEmitsExactlyOneEndLine() {
+        // GIVEN — a real Dev slave with enough history to compact, and a monitor capturing the tool lines
+        var dev = devSlave();
+        var memory = dev.getMemory();
+        for (int i = 0; i < 2; i++) {
+            memory.add(UserMessage.from("seed " + i));
+            memory.add(AiMessage.from("seed reply " + i));
+        }
+        var tool = newTool(planSlave(), reviewSlave(), dev, () -> BUDGET);
+        var toolLines = new ArrayList<String>();
+        tool.withToolRequest(ToolLoopRequest.builder()
+                .memory(new ThreadSafeMemory())
+                .chatModel(model)
+                .monitor(new AiMonitor() {
+                    @Override public void onChatResponse(SimpleMessage m) {}
+                    @Override public void onTool(String message) { toolLines.add(message); }
+                })
+                .build());
+
+        // WHEN
+        var reply = tool.compactDev();
+
+        // THEN — the LLM still gets its tool reply ...
+        assertThat(reply).contains("Da Mek compacted.");
+        // AND — the chat shows exactly one start and one end line: a slave reads like the root (R-CT-8)
+        assertThat(toolLines).filteredOn(l -> l.startsWith(CompactFeedback.START_PREFIX)).hasSize(1);
+        var endLines = toolLines.stream().filter(l -> l.contains(CompactFeedback.END_MARKER)).toList();
+        assertThat(endLines).hasSize(1);
+        // AND — the end line names the agent, its before/after numbers, the shared duration+wall-time
+        // suffix and the result size (system clock ⇒ pattern, not a literal)
+        assertThat(endLines.getFirst()).matches("🗜 " + AiDevAgent.NAME + CompactFeedback.END_MARKER
+                + "\\d+ → 1 messages, ~\\d+ → ~\\d+ tokens \\(\\d+(?:m \\d+)?s, \\d{2}:\\d{2}\\) \\(\\d+ chars\\)");
+        // AND — the removed "Da Mek compacted." onTool line never returns as a second success message
+        assertThat(toolLines).noneMatch(l -> l.startsWith("Da Mek compacted."));
     }
 }

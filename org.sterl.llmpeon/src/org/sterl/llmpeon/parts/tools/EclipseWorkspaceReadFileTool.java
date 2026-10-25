@@ -15,6 +15,7 @@ import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceVisitor;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.ILog;
+import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.ui.PlatformUI;
@@ -37,7 +38,23 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
 
     private static final ILog LOG = Platform.getLog(EclipseWorkspaceReadFileTool.class);
 
+    /** Seam for the workspace refresh of {@code eclipseList}, production is {@code IResource::refreshLocal}. */
+    @FunctionalInterface
+    public interface Refresh {
+        void apply(IResource resource, int depth, IProgressMonitor monitor) throws CoreException;
+    }
+
     private volatile IProject currentProject;
+    private final Refresh refresh;
+
+    public EclipseWorkspaceReadFileTool() {
+        this(IResource::refreshLocal);
+    }
+
+    /** Test seam — the refresh failure of {@code eclipseList} is unreachable through the real API. */
+    public EclipseWorkspaceReadFileTool(Refresh refresh) {
+        this.refresh = refresh;
+    }
 
     public void setCurrentProject(IProject currentProject) {
         this.currentProject = currentProject;
@@ -54,7 +71,7 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
         var resource = EclipseUtil.resolveInEclipse(filePath, Optional.ofNullable(currentProject));
         if (resource.isEmpty()) {
             onProblem("No eclipse file found for " + filePath);
-            return "Cannot open: no file found at '" + filePath + "'. Use searchWorkspaceFiles to find the correct path.";
+            return "Cannot open: no file found at '" + filePath + "'." + EclipseUtil.unresolvedHint(filePath);
         }
         var r = resource.get();
         if (!(r instanceof IFile file)) {
@@ -63,7 +80,8 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
         }
         try {
             PlatformUI.getWorkbench().getDisplay().asyncExec(() -> EclipseUtil.openInEditor(file));
-            String result = "Opened: " + filePath;
+            var via = EclipseUtil.resolvedViaNote(filePath, file);
+            String result = "Opened: " + filePath + (via.isEmpty() ? "" : " — " + via);
             onTool("Opened file in editor: " + filePath + " " + StringUtil.charsSuffix(result));
             return result;
         } catch (Exception e) {
@@ -109,12 +127,14 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
             } catch (CoreException e) {
                 throw new IllegalArgumentException(e.getMessage(), e);
             }
-            String result = FileLines.extract(content, startLine, endLine);
+            var via = EclipseUtil.resolvedViaNote(filePath, f);
+            String result = FileLines.extract(content, startLine, endLine)
+                    + (via.isEmpty() ? "" : System.lineSeparator() + System.lineSeparator() + via);
             onTool("📜 Reading eclipse" + lines + " file " + filePath + " " + StringUtil.charsSuffix(result));
             return result;
         }
         onProblem("No eclipse file found for " + filePath);
-        return "No eclipse file found for '" + filePath + "' use searchWorkspaceFiles to find the correct file name and path.";
+        return "No eclipse file found for '" + filePath + "'." + EclipseUtil.unresolvedHint(filePath);
     }
 
     @Tool("Find any files workspace-wide by name (*, ? wildcard supported). Default file-path finder.")
@@ -223,7 +243,7 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
 
         var resource = EclipseUtil.resolveInEclipse(path, Optional.ofNullable(currentProject));
         if (resource.isEmpty()) {
-            throw new IllegalArgumentException("Directory not found: " + path);
+            throw new IllegalArgumentException("Directory not found: " + path + EclipseUtil.unresolvedHint(path));
         }
 
         var res = resource.get();
@@ -233,6 +253,7 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
         }
 
         try {
+            var refreshNote = refreshListing(container);
             var entries = new ArrayList<String>();
             for (IResource member : container.members()) {
                 if (member.isDerived()) continue;
@@ -242,11 +263,40 @@ public class EclipseWorkspaceReadFileTool extends AbstractEclipseTool {
                     entries.add(prefix + pathToAdd);
                 }
             }
-            String result = entries.isEmpty() ? "Directory is empty: " + path : String.join("\n", entries);
+            var header = new ArrayList<String>();
+            var via = EclipseUtil.resolvedViaNote(path, container);
+            if (!via.isEmpty()) header.add(via);
+            refreshNote.ifPresent(header::add);
+            var entriesText = entries.isEmpty() ? "Directory is empty: " + path : String.join("\n", entries);
+            String result = header.isEmpty()
+                    ? entriesText
+                    : String.join(System.lineSeparator(), header) + System.lineSeparator() + entriesText;
             onTool("List directories for " + path + " found " + entries.size() + " elements." + " " + StringUtil.charsSuffix(result));
             return result;
         } catch (CoreException e) {
             throw new RuntimeException("Failed to list " + path, e);
+        }
+    }
+
+    /**
+     * A file written past the workspace tree (disk tool, shell, another editor) is invisible to
+     * {@code members()} until the folder is refreshed — listing without it is a false negative, the
+     * most expensive tool error of this repo. DEPTH_ONE: the listing is non-recursive, so the
+     * immediate children are exactly what has to be in sync.
+     * <p>
+     * A failed refresh never passes silently: the returned note names the limitation in the result
+     * (the listing may be incomplete) and {@code onProblem} carries path and cause. A user Stop is
+     * deliberately not covered here — {@code OperationCanceledException} is a RuntimeException and
+     * runs through untouched.
+     */
+    private Optional<String> refreshListing(IContainer container) {
+        try {
+            refresh.apply(container, IResource.DEPTH_ONE, getProgressMonitor());
+            return Optional.empty();
+        } catch (CoreException e) {
+            onProblem("Refresh failed for " + JdtUtil.pathOf(container) + " " + e.getMessage());
+            return Optional.of(
+                    "(refresh failed — files written outside Eclipse may be missing from this listing)");
         }
     }
 }
