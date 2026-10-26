@@ -1,0 +1,552 @@
+package org.sterl.llmpeon.tool.web;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.sterl.llmpeon.StreamMock;
+import org.sterl.llmpeon.ai.ConfiguredChatModel;
+import org.sterl.llmpeon.ai.LlmConfig;
+import org.sterl.llmpeon.memory.ThreadSafeMemory;
+import org.sterl.llmpeon.shared.AiMonitor;
+import org.sterl.llmpeon.shared.StringUtil;
+import org.sterl.llmpeon.tool.ToolLoopRequest;
+import org.sterl.llmpeon.tool.model.SimpleMessage;
+
+import com.sun.net.httpserver.HttpServer;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
+
+/**
+ * webFetchAsMarkdown pagination (org.sterl.llmpeon.core/docs/web-tools.md R-WEB-1…3): first window, cache hit
+ * without refetch, LRU eviction, honest HTTP error path — and R-WEB-13: only HTML is converted, every
+ * other content type arrives raw with the path named in the footer.
+ */
+@Timeout(30)
+class WebFetchToolTest {
+
+    /** Flexmark appends one trailing empty line, so markers + 1 = markdown lines. */
+    private static final int PAGE_3000_MARKERS = 2999;
+    private static final int PAGE_1000_MARKERS = 999;
+
+    WebFetchTool tool;
+    HttpServer server;
+    String base;
+    Map<String, AtomicInteger> callCounters = new ConcurrentHashMap<>();
+
+    @BeforeEach
+    void setUp() throws IOException {
+        tool = new WebFetchTool();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        base = "http://localhost:" + server.getAddress().getPort();
+        server.start();
+    }
+
+    @AfterEach
+    void tearDown() {
+        server.stop(0);
+    }
+
+    /** Every fixture of this file predates R-WEB-13 and served HTML — the default keeps them as they are. */
+    private void serve(String context, int status, byte[] body) {
+        serve(context, status, body, "text/html; charset=UTF-8");
+    }
+
+    /** {@code contentType == null} means the response carries no Content-Type header at all. */
+    private void serve(String context, int status, byte[] body, String contentType) {
+        server.createContext(context, exchange -> {
+            callCounters.computeIfAbsent(context, k -> new AtomicInteger()).incrementAndGet();
+            if (contentType != null) {
+                exchange.getResponseHeaders().set("Content-Type", contentType);
+            }
+            exchange.sendResponseHeaders(status, body.length == 0 ? -1 : body.length);
+            if (body.length > 0) {
+                try {
+                    exchange.getResponseBody().write(body);
+                } catch (IOException ignored) {
+                    // test server — client already got the headers
+                }
+            }
+            exchange.close();
+        });
+    }
+
+    private int calls(String context) {
+        return callCounters.getOrDefault(context, new AtomicInteger()).get();
+    }
+
+    // UC-WEB-1
+    @Test
+    void webFetchFirstCallReturnsFirstWindow() throws Exception {
+        String url = base + "/page3000";
+        serve("/page3000", 200, page(PAGE_3000_MARKERS).getBytes(StandardCharsets.UTF_8));
+
+        // GIVEN a 3000-line markdown page WHEN webFetchAsMarkdown(url) without range
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN lines 1-500 numbered, exact disclosure, line 501 not included
+        assertThat(result)
+                .startsWith("   1: LN1")
+                .contains("500: LN500")
+                .contains("lines 1–500 of 3000 (converted from HTML) — read on with startLine=501")
+                .doesNotContain("501: LN501");
+
+        // AND a window request beyond the hard max is clamped to 500 lines
+        String clamped = tool.webFetchAsMarkdown(url, 1, 3000);
+        assertThat(clamped)
+                .contains("500: LN500")
+                .contains("lines 1–500 of 3000 (converted from HTML) — read on with startLine=501")
+                .doesNotContain("501: LN501");
+
+        // AND endLine < startLine is swapped like FileLines.extract — the label names the shown lines
+        String swapped = tool.webFetchAsMarkdown(url, 500, 100);
+        assertThat(swapped)
+                .startsWith(" 100: LN100")
+                .contains("500: LN500")
+                .contains("lines 100–500 of 3000 (converted from HTML) — read on with startLine=501")
+                .doesNotContain("501: LN501");
+
+        // AND a start beyond the document is reported honestly
+        assertThat(tool.webFetchAsMarkdown(url, 3001, null))
+                .isEqualTo("URL has 3000 lines, requested start 3001");
+    }
+
+    // UC-WEB-2
+    @Test
+    void webFetchCacheHitPaginatesWithoutRefetch() throws Exception {
+        String url = base + "/page3000";
+        serve("/page3000", 200, page(PAGE_3000_MARKERS).getBytes(StandardCharsets.UTF_8));
+        tool.webFetchAsMarkdown(url, null, null);
+
+        // GIVEN the URL is cached WHEN webFetchAsMarkdown(url, startLine=501)
+        String result = tool.webFetchAsMarkdown(url, 501, null);
+
+        // THEN lines 501-1000 from the cached snapshot, no second HTTP call
+        assertThat(result)
+                .startsWith(" 501: LN501")
+                .contains("1000: LN1000")
+                .contains("lines 501–1000 of 3000 (converted from HTML) — read on with startLine=1001")
+                .doesNotContain("1001: LN1001");
+        assertThat(calls("/page3000")).isEqualTo(1);
+    }
+
+    // UC-WEB-3
+    @Test
+    void webFetchCacheEvictionRefetches() throws Exception {
+        for (int i = 1; i <= 17; i++) {
+            String url = base + "/page" + i;
+            serve("/page" + i, 200, page(PAGE_1000_MARKERS).getBytes(StandardCharsets.UTF_8));
+            tool.webFetchAsMarkdown(url, null, null);
+        }
+        assertThat(calls("/page1")).isEqualTo(1);
+
+        // GIVEN the 17th URL evicted the oldest WHEN the evicted URL is requested again
+        String result = tool.webFetchAsMarkdown(base + "/page1", null, null);
+
+        // THEN refetch, window back to 1-500
+        assertThat(result)
+                .startsWith("   1: LN1")
+                .contains("lines 1–500 of 1000 (converted from HTML) — read on with startLine=501");
+        assertThat(calls("/page1")).isEqualTo(2);
+    }
+
+    // UC-WEB-4
+    @Test
+    void webFetchHttpErrorReturnsStatusAndSnippet() throws Exception {
+        StringBuilder body = new StringBuilder("<html><body>");
+        for (int i = 1; i <= 50; i++) {
+            if (i > 1) body.append("<br>");
+            body.append("ERR").append(i);
+        }
+        body.append("-ENDBODY</body></html>");
+        String url = base + "/error";
+        serve("/error", 500, body.toString().getBytes(StandardCharsets.UTF_8));
+
+        // GIVEN an HTTP 500 with a long body WHEN webFetchAsMarkdown(url)
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN status plus snippet of the first lines, never the full body
+        assertThat(result)
+                .startsWith("Failed to fetch " + url + ". HTTP status 500")
+                .contains("1: ERR1")
+                .contains("10: ERR10")
+                // snippet is capped at 10 lines — line 11 of the error markdown must not leak
+                .doesNotContain("11: ERR11")
+                .doesNotContain("ERR50-ENDBODY");
+
+        // AND error responses are never cached — a retry hits the server again
+        assertThat(tool.webFetchAsMarkdown(url, null, null)).contains("HTTP status 500");
+        assertThat(calls("/error")).isEqualTo(2);
+    }
+
+    // R-BC-4 (org.sterl.llmpeon.core/docs/bounded-caches.md)
+    // LRU recency at the current cap (R-WEB-9): fill 16 URLs, refresh the oldest (a),
+    // fetch a 17th (q) -> evicts b (not a); a stays a hit (calls==1), b refetches (calls==2),
+    // c..q stay at 1. The exact cap size is proven by webFetchCacheHolds16Pages (UC-WEB-9).
+    // Mutation: FIFO (get does not refresh, old behavior) -> a evicted at q -> calls(a)==2 -> red.
+    // Mutation: unbounded -> b still cached -> calls(b)==1 -> red.
+    @Test
+    void webFetchCacheUsesBoundedLru() throws Exception {
+        for (char c = 'a'; c <= 'q'; c++) {
+            serve("/bc-" + c, 200, page(PAGE_1000_MARKERS).getBytes(StandardCharsets.UTF_8));
+        }
+
+        // GIVEN 16 distinct URLs fill the cache WHEN the oldest is refreshed and a 17th arrives
+        for (char c = 'a'; c <= 'p'; c++) {
+            tool.webFetchAsMarkdown(base + "/bc-" + c, 1, null);
+        }
+        String refreshed = tool.webFetchAsMarkdown(base + "/bc-a", 501, null);
+        assertThat(refreshed).contains("501: LN501");
+        assertThat(calls("/bc-a")).isEqualTo(1);
+        tool.webFetchAsMarkdown(base + "/bc-q", 1, null);
+
+        // THEN the refresh protected a (LRU evicted b): a is still a hit, b refetches
+        String aAgain = tool.webFetchAsMarkdown(base + "/bc-a", 501, null);
+        assertThat(aAgain).contains("501: LN501");
+        assertThat(calls("/bc-a")).isEqualTo(1);
+        tool.webFetchAsMarkdown(base + "/bc-b", 1, null);
+        assertThat(calls("/bc-b")).isEqualTo(2);
+
+        // AND every other URL was fetched exactly once
+        for (char c = 'c'; c <= 'q'; c++) {
+            assertThat(calls("/bc-" + c)).as("calls(/bc-%s)", c).isEqualTo(1);
+        }
+    }
+
+    // UC-WEB-9
+    @Test
+    void webFetchCacheHolds16Pages() throws Exception {
+        for (int i = 1; i <= 16; i++) {
+            serve("/hold-" + i, 200, page(PAGE_1000_MARKERS).getBytes(StandardCharsets.UTF_8));
+        }
+        for (int i = 1; i <= 17; i++) {
+            serve("/evict-" + i, 200, page(PAGE_1000_MARKERS).getBytes(StandardCharsets.UTF_8));
+        }
+
+        // GIVEN 16 distinct URLs fill the cache WHEN URL 1 is requested again
+        for (int i = 1; i <= 16; i++) {
+            tool.webFetchAsMarkdown(base + "/hold-" + i, null, null);
+        }
+        String hit = tool.webFetchAsMarkdown(base + "/hold-1", null, null);
+
+        // THEN cache hit — no second HTTP call
+        assertThat(hit).startsWith("   1: LN1").contains("of 1000");
+        assertThat(calls("/hold-1")).isEqualTo(1);
+
+        // AND GIVEN 17 distinct URLs fetched in sequence WHEN URL 1 is requested again
+        for (int i = 1; i <= 17; i++) {
+            tool.webFetchAsMarkdown(base + "/evict-" + i, null, null);
+        }
+        String refetched = tool.webFetchAsMarkdown(base + "/evict-1", null, null);
+
+        // THEN refetch — URL 1 was the oldest of 17
+        assertThat(refetched).startsWith("   1: LN1").contains("of 1000");
+        assertThat(calls("/evict-1")).isEqualTo(2);
+    }
+
+    @Test
+    void webFetchEmptyContentIsHonest() throws Exception {
+        String url = base + "/empty";
+        serve("/empty", 200, new byte[0]);
+
+        assertThat(tool.webFetchAsMarkdown(url, null, null))
+                .isEqualTo("Fetched " + url + ": empty content (0 lines)");
+    }
+
+    // R-RS-1
+    @Test
+    void webFetchDoneLineDisclosesWindowChars() throws Exception {
+        String url = base + "/page3000";
+        serve("/page3000", 200, page(PAGE_3000_MARKERS).getBytes(StandardCharsets.UTF_8));
+        var tools = new ArrayList<String>();
+        tool.withToolRequest(request(monitorCapturing(tools)));
+
+        // GIVEN a 3000-line page WHEN webFetchAsMarkdown(url) — cache miss
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN the start line stays, the done line is emitted after the result with its exact size
+        assertThat(result).doesNotContain(" chars)");
+        assertThat(tools).hasSize(2);
+        assertThat(tools.get(0)).isEqualTo("Reading " + url);
+        assertThat(tools.get(1)).startsWith("Fetched " + url);
+        assertThat(tools.get(1)).endsWith(StringUtil.charsSuffix(result));
+
+        // AND the cache-hit path emits the same done line for the cached window
+        tools.clear();
+        String cached = tool.webFetchAsMarkdown(url, 501, null);
+        assertThat(cached).doesNotContain(" chars)");
+        assertThat(tools).hasSize(1);
+        assertThat(tools.get(0)).startsWith("Fetched " + url);
+        assertThat(tools.get(0)).endsWith(StringUtil.charsSuffix(cached));
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchRawTextForPlainContent() throws Exception {
+        // GIVEN a text/plain body that is NOT html: tags, the double space and the line breaks are
+        // the content the server delivered
+        String url = base + "/plain";
+        serve("/plain", 200, "line one\nline two\n<b>not bold</b>  two spaces\n"
+                .getBytes(StandardCharsets.UTF_8), "text/plain; charset=UTF-8");
+
+        // WHEN
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN — every line raw and numbered, no escaping, no collapse, and the footer names the path
+        assertThat(result)
+                .startsWith("   1: line one")
+                .contains("   2: line two")
+                .contains("   3: <b>not bold</b>  two spaces")
+                .doesNotContain("\\<")
+                .contains("lines 1–4 of 4 (raw text)");
+    }
+
+    /**
+     * The footer is tool framing, never page content — it has to open its own line, whatever line
+     * ending the fetched document uses. The separator comes from {@code FileLines.extract}, i.e. from
+     * the document itself, so the pin is the document's ending and stays deterministic on every host
+     * (a {@code System.lineSeparator()} expectation here would test the host, not the tool).
+     */
+    // UC-WEB-13
+    @Test
+    void webFetchFooterStartsOnItsOwnLine() throws Exception {
+        // GIVEN an LF page whose last content line carries no trailing line ending — tightest case
+        String lfUrl = base + "/footerLf";
+        serve("/footerLf", 200, "line one\nline two\nlast content line".getBytes(StandardCharsets.UTF_8),
+                "text/plain; charset=UTF-8");
+
+        // WHEN the whole document is read
+        String result = tool.webFetchAsMarkdown(lfUrl, null, null);
+
+        // THEN the footer opens its own line instead of gluing onto the content above it
+        assertThat(result).endsWith("\nlines 1–3 of 3 (raw text)");
+
+        // AND the same for the read-on variant, where the hint is the last token
+        assertThat(tool.webFetchAsMarkdown(lfUrl, 1, 2))
+                .endsWith("\nlines 1–2 of 3 (raw text) — read on with startLine=3");
+
+        // AND for a CRLF document, where the emitted separator is the document's, never the host's
+        String crlfUrl = base + "/footerCrlf";
+        serve("/footerCrlf", 200,
+                "line one\r\nline two\r\nlast content line".getBytes(StandardCharsets.UTF_8),
+                "text/plain; charset=UTF-8");
+
+        assertThat(tool.webFetchAsMarkdown(crlfUrl, null, null)).endsWith("\r\nlines 1–3 of 3 (raw text)");
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchHtmlIsConvertedToMarkdown() throws Exception {
+        // GIVEN a real HTML page (no charset surprises)
+        String url = base + "/html";
+        serve("/html", 200, "<html><body><h1>Title</h1><p>hello <b>world</b></p></body></html>"
+                .getBytes(StandardCharsets.UTF_8), "text/html; charset=UTF-8");
+
+        // WHEN
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN — the markup is gone and the Markdown form of the real Flexmark default is there
+        // (setext H1, not "# "), and the footer names the path
+        assertThat(result)
+                .doesNotContain("<h1>")
+                .doesNotContain("<p>")
+                .contains("   1: Title")
+                .contains("   2: =====")
+                .contains("**world**")
+                .contains("(converted from HTML)");
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchXhtmlIsConvertedToMarkdown() throws Exception {
+        // GIVEN the same markup served as a +xml descendant — the media type is the only difference
+        // to webFetchHtmlIsConvertedToMarkdown
+        String url = base + "/xhtml";
+        serve("/xhtml", 200, ("<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><h1>Title</h1>"
+                + "<p>hello <b>world</b></p></body></html>").getBytes(StandardCharsets.UTF_8),
+                "application/xhtml+xml");
+
+        // WHEN
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN — the +xml suffix takes the converter: same Markdown form as text/html, same label
+        assertThat(result)
+                .doesNotContain("<h1>")
+                .doesNotContain("<p>")
+                .contains("   1: Title")
+                .contains("   2: =====")
+                .contains("**world**")
+                .contains("(converted from HTML)");
+    }
+
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchCacheHitKeepsRawTextAndLabel() throws Exception {
+        // GIVEN a text/plain page cached by a first call
+        String url = base + "/plain-cached";
+        serve("/plain-cached", 200, "first line\n<b>x</b>\n".getBytes(StandardCharsets.UTF_8),
+                "text/plain; charset=UTF-8");
+        tool.webFetchAsMarkdown(url, null, null);
+
+        // WHEN the same URL is paginated
+        String result = tool.webFetchAsMarkdown(url, 2, null);
+
+        // THEN — from the cached snapshot (no refetch), still raw, still labelled: a hit never runs
+        // the converter again
+        assertThat(result).contains("   2: <b>x</b>").contains("(raw text)");
+        assertThat(calls("/plain-cached")).isEqualTo(1);
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchJsonStaysRaw() throws Exception {
+        // GIVEN an API response: quotes, brackets and the embedded tag are the payload
+        String url = base + "/json";
+        serve("/json", 200, ("{\"name\": \"peon\",\n\"topics\": [\"ai\", \"eclipse\"],\n"
+                + "\"html\": \"<b>x</b>\"}\n").getBytes(StandardCharsets.UTF_8), "application/json");
+
+        // WHEN
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN — still valid JSON, and the footer says raw
+        assertThat(result)
+                .contains("\"topics\": [\"ai\", \"eclipse\"]")
+                .contains("\"html\": \"<b>x</b>\"")
+                .doesNotContain("\\[")
+                .contains("(raw text)");
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchHtmlCacheHitKeepsConvertedLabel() throws Exception {
+        // GIVEN an HTML page cached by a first call
+        String url = base + "/html-cached";
+        serve("/html-cached", 200, "<html><body><h1>Title</h1><p>one</p><p>two</p></body></html>"
+                .getBytes(StandardCharsets.UTF_8), "text/html; charset=UTF-8");
+        assertThat(tool.webFetchAsMarkdown(url, null, null)).contains("   1: Title").contains("   2: =====");
+
+        // WHEN the same URL is paginated
+        String result = tool.webFetchAsMarkdown(url, 2, null);
+
+        // THEN — the label was cached with the text: the hit still reports the HTML path, the window
+        // still pages the converted Markdown, and no markup appears after the fact
+        assertThat(result).startsWith("   2: =====").contains("(converted from HTML)").doesNotContain("<h1>");
+        assertThat(calls("/html-cached")).isEqualTo(1);
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchUnknownContentTypeStaysRaw() throws Exception {
+        // GIVEN a content type that is neither text/html nor a +xml descendant
+        String url = base + "/stream";
+        serve("/stream", 200, "a\nb<b>c</b>".getBytes(StandardCharsets.UTF_8), "application/octet-stream");
+
+        // WHEN
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN — raw, no "unknown means convert like before" fallback
+        assertThat(result).contains("   2: b<b>c</b>").contains("lines 1–2 of 2 (raw text)");
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchMissingContentTypeStaysRaw() throws Exception {
+        // GIVEN a response carrying no Content-Type header at all
+        String url = base + "/no-type";
+        serve("/no-type", 200, "a\nb<b>c</b>".getBytes(StandardCharsets.UTF_8), null);
+
+        // WHEN
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN — a missing header is no converter call and no crash: it is the raw path
+        assertThat(result).contains("   2: b<b>c</b>").contains("lines 1–2 of 2 (raw text)");
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchUppercaseMediaTypeIsConverted() throws Exception {
+        // GIVEN the media type written in upper case, as senders may send it
+        String url = base + "/upper";
+        serve("/upper", 200, "<html><body><h1>Title</h1><p>hello <b>world</b></p></body></html>"
+                .getBytes(StandardCharsets.UTF_8), "TEXT/HTML; CHARSET=UTF-8");
+
+        // WHEN
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN — the match is case-insensitive, so this is the converter path with the same label
+        assertThat(result)
+                .doesNotContain("<h1>")
+                .contains("   1: Title")
+                .contains("   2: =====")
+                .contains("**world**")
+                .contains("(converted from HTML)");
+    }
+
+    // R-WEB-13
+    // UC-WEB-13
+    @Test
+    void webFetchMissingCharsetDecodesAsUtf8() throws Exception {
+        // GIVEN text/plain without a charset parameter and non-ASCII content
+        String url = base + "/no-charset";
+        serve("/no-charset", 200, "prüfung äöü\n".getBytes(StandardCharsets.UTF_8), "text/plain");
+
+        // WHEN
+        String result = tool.webFetchAsMarkdown(url, null, null);
+
+        // THEN — UTF-8 is the default, so the umlauts arrive whole instead of as mojibake
+        assertThat(result).startsWith("   1: prüfung äöü").contains("lines 1–2 of 2 (raw text)");
+    }
+
+
+
+    /** Full request wiring (memory + chatModel are required fields) — the model is never called by this tool. */
+    private static ToolLoopRequest request(AiMonitor monitor) {
+        var config = LlmConfig.builder().model("test").build();
+        var cm = new StreamMock().buildMock(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("unused"))
+                .build());
+        return ToolLoopRequest.builder()
+                .memory(new ThreadSafeMemory())
+                .chatModel(new ConfiguredChatModel(config, cm))
+                .monitor(monitor)
+                .build();
+    }
+
+    private static AiMonitor monitorCapturing(List<String> tools) {
+        return new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onTool(String message) { tools.add(message); }
+        };
+    }
+
+    private static String page(int markers) {
+        StringBuilder sb = new StringBuilder("<html><body>");
+        for (int i = 1; i <= markers; i++) {
+            if (i > 1) sb.append("<br>");
+            sb.append("LN").append(i);
+        }
+        sb.append("</body></html>");
+        return sb.toString();
+    }
+}

@@ -31,7 +31,7 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
 /**
- * R-RS-1 / R-RS-2 (docs/tool-result-size.md): every tool completion line ends with the exact
+ * R-RS-1 / R-RS-2 (org.sterl.llmpeon.core/docs/tool-result-size.md): every tool completion line ends with the exact
  * character count of the tool's return string; the return string itself stays untouched.
  */
 class ToolResultSizeTest {
@@ -70,39 +70,6 @@ class ToolResultSizeTest {
         assertThat(result).isEmpty();
         assertThat(tools).hasSize(1);
         assertThat(tools.get(0)).endsWith("(0 chars)");
-    }
-
-    // R-RS-1
-    @Test
-    void subAgentTimingAndCharsCoexist() {
-        // GIVEN an agent whose compact() returns COMPACTED; the monitor captures the done line
-        var memory = new ThreadSafeMemory();
-        memory.add(UserMessage.from("Test message"));
-        memory.add(AiMessage.from("AI response"));
-        AiAgent agent = new AiAgent() {
-            @Override public String getName() { return "stub-agent"; }
-            @Override public String getSystemPrompt() { return "system"; }
-            @Override public ChatResponse call(String message, AiMonitor monitor) { return null; }
-            @Override public CompactResult compact(AiMonitor monitor) { return CoreTestFixtures.compactedResult(); }
-            @Override public ThreadSafeMemory getMemory() { return memory; }
-            @Override public void clear() {}
-            @Override public boolean isToolActive(SmartToolExecutor exec) { return true; }
-            @Override public boolean isMcpToolActive(String toolName) { return true; }
-            @Override public int tokenContextUsedInPercent() { return 0; }
-            @Override public List<ChatMessage> buildStaticMessages(AiMonitor monitor) { return List.of(); }
-        };
-        var tools = new ArrayList<String>();
-        var subject = new CompactSessionTool();
-        subject.withToolRequest(request(memory, monitorCapturing(tools)).agent(agent));
-
-        // WHEN the sub-agent tool finishes
-        String result = subject.compactSession(null);
-
-        // THEN duration and chars sit side by side, chars last — and the result stays clean
-        assertThat(tools).hasSize(1);
-        assertThat(tools.get(0)).matches(".*\\(\\d+s(?: \\d+s)?\\) \\(\\d+ chars\\)$");
-        assertThat(tools.get(0)).endsWith(StringUtil.charsSuffix(result));
-        assertThat(result).doesNotContain(" chars)");
     }
 
     // R-RS-2

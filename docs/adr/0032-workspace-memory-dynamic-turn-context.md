@@ -1,6 +1,6 @@
 # ADR-0032 — Workspace-Memory: dynamisch im Turn-Context (ersetzt den statischen Snapshot)
 
-**Status:** Implemented (2026-08-23) — gebaut, Review bestanden, Suite 98/0 grün; NICHT committed
+**Status:** Implemented (2026-08-23) — gebaut, Review bestanden; NICHT committed
 **Revision (2026-08-23, User):** der statische Memory-Snapshot aus [ADR-0031](0031-static-context-env-plus-memory.md)
 wird **komplett entfernt** — Memory lebt nur noch dynamisch (dieses ADR). Static Context = nur noch Env.
 Begründung: seit dem dynamischen Item ist der Snapshot reine Duplikation (jeder Eintrag doppelt im
@@ -24,7 +24,7 @@ für den Grundstock), aber `WorkspaceMemoryTool` wird zusätzlich zum `ContextIt
 (`PoDelegateTool`; Sklaven, drittes Item nach Plan + AGENTS.md) in die nächste Nachricht gerendert
 wird. Dedup über festen Key, geänderter Inhalt → neuer Snapshot; alte Snapshots bleiben bis zum Compact.
 
-Regeln + BDD: [context-architecture.md](../context-architecture.md) (Abschnitt „Workspace-Memory
+Regeln + BDD: [context-architecture.md](../../org.sterl.llmpeon.core/docs/context-architecture.md) (Abschnitt „Workspace-Memory
 zusätzlich dynamisch").
 
 ## Consequences

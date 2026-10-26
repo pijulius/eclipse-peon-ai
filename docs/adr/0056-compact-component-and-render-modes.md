@@ -1,9 +1,9 @@
 # 0056: Compact als eigene core-Komponente + Render-Modi in ChatMessageUtil
 
-**Status:** Partially superseded (Decision 2 „Render-Modi als Options-Record") · **Datum:** 2026-09-24 · **Zyklus:** Compact-Redesign (docs/compact.md)
+**Status:** Partially superseded (Decision 2 „Render-Modi als Options-Record") · **Datum:** 2026-09-24 · **Zyklus:** Compact-Redesign (org.sterl.llmpeon.core/docs/compact.md)
 
 > **Superseded-Teil (2026-10-18):** Decision 2 („Render-Modi in `ChatMessageUtil` als Options-Record")
-> ist gefallen — [Tagged Results](../tagged-results.md) R-TR-8 hat **jedes Cap aus dem Renderer**
+> ist gefallen — [Tagged Results](../../org.sterl.llmpeon.core/docs/tagged-results.md) R-TR-8 hat **jedes Cap aus dem Renderer**
 > entfernt: `ChatMessageUtil.toString(msg, RenderOptions)` und `RenderOptions` sind gelöscht, es gibt
 > genau einen Renderpfad (`toString(msg)` = `extractMessages` + Join), und das Kürzen passiert
 > ausschließlich im Compact (`ContextTrimComponent`). Decisions 1, 3, 4 und alle Consequences gelten
@@ -57,4 +57,4 @@ Außerdem: `join/4` (alter Budget-Entwurf) schätzt niedriger als die bestehende
   migrieren (Plan-Detail, eigener Aufräumschritt oder nächster Kontakt).
 - Risiko: ChatMessageUtil ist breit genutzt — Render-Modus muss default-kompatibel bleiben
   (alte Aufrufe unverändert), Tests decken die Bestandsformate ab.
-**Update 2026-10-16:** Estimate-Faktor `chars×2/7` → `chars/3`, Umkehr `capChars = restTokens×3/n` synchron (Terminationsgarantie R-CIB-4.4 bleibt, `fbe2866f`) — „eine Schätzkonvention, eine Stelle" bleibt unverändert.
+**Update 2026-10-16:** Estimate-Faktor `chars×2/7` → `chars/3`, Umkehr `capChars = restTokens×3/n` synchron (Terminationsgarantie R-CIB-4.4 bleibt) — „eine Schätzkonvention, eine Stelle" bleibt unverändert.

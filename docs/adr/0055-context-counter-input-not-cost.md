@@ -1,7 +1,7 @@
 # ADR-0055: Context-Counter misst Input, nicht Kosten
 
 **Status:** Accepted · 2026-09-23 · Hotfix „Ehrlicher Compact" · Feature:
-[compact.md](../compact.md)
+[compact.md](../../org.sterl.llmpeon.core/docs/compact.md)
 
 ## Context
 
@@ -47,4 +47,4 @@ klar getrennt.
   geschlossen.
 - Die Header-Kosten bleiben Team-kumulativ (Jon + Slaven + Compressor + SearchAgent) — bewusst
   unverändert; Verwirrung nur durch fehlende Beschriftung, nicht durch falsche Zahl.
-**Update 2026-10-16:** Estimate-Faktor `chars×2/7` → `chars/3` (Nachtzyklus 5, Paul-Vorschlag, Jon-Freigabe, `fbe2866f`) — der Code hat die in token-usage.md R1 dokumentierte Konvention nachgezogen; die hier dokumentierte „input-not-cost"-Entscheidung bleibt unverändert.
+**Update 2026-10-16:** Estimate-Faktor `chars×2/7` → `chars/3` (Nachtzyklus 5, Paul-Vorschlag, Jon-Freigabe) — der Code hat die in token-usage.md R1 dokumentierte Konvention nachgezogen; die hier dokumentierte „input-not-cost"-Entscheidung bleibt unverändert.

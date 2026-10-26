@@ -53,7 +53,7 @@ isn't clear from a rule/BDD.
 | [0042](0042-project-skill-slot.md) | Project-Skill-Slot: ein SkillService, zwei Slots (config + `<project>/.agents/skills`), Override, atomarer Swap, name-keyed Enabled-State | Accepted |
 | [0043](0043-scaffold-write-validator.md) | Scaffold-Write-Scoping via WriteValidator mit dynamischen Roots (configDir + Projekt-Skills-Dir), kein Instanz-Merge | Accepted |
 | [0045](0045-mcp-protocol-version-auto-detect.md) | MCP Protocol-Version: leer = Auto-Detect als Default, kein stiller Default (`2025-06-18` entfällt, Clean Break), editierbare Combo | Accepted |
-| [0046](0046-core-portability-review.md) | Core-Portability-Review (Nordstern Web-App-Port): core import-rein (0 Eclipse-Imports), 4 Moves Plugin→core (`b7f67e0`), B-Moves dokumentiert, Composition-Root-Gap | Accepted |
+| [0046](0046-core-portability-review.md) | Core-Portability-Review (Nordstern Web-App-Port): core import-rein (0 Eclipse-Imports), 4 Moves Plugin→core, B-Moves dokumentiert, Composition-Root-Gap | Accepted |
 | [0049](0049-jdt-debug-2026-09-api-drift.md) | JDT-Debug-API-Drift 2026-09: `model`-Paket weg, `IJavaProcess` weg, `getRootThreadGroups()` listet `main` nicht → `getThreads()`; Breakpoints über `JDIDebugModel`, Eval über `EvaluationManager` | Accepted |
 | [0050](0050-debugger-jdt-not-dap-user-session.md) | Debugger-Basis JDT-Debug-Model statt DAP; Session = User-Property (kein Auto-Start/-Disconnect); keine Confirmations | Accepted |
 | [0051](0051-debugger-no-live-session-tests.md) | Debugger ohne automatisierte Live-Session-Tests (flaky VMStart-Race): UC-JD-1 + Stub-Tests automatisiert, UC-JD-2…6 manuell (E2E-Smoke) | Accepted |
@@ -76,6 +76,11 @@ isn't clear from a rule/BDD.
 | [0069](0069-shared-mcp-connection-per-server.md) | Ein MCP-Server = **eine** Verbindung: der Connection-Service besitzt den `McpService`, alle Registries adoptieren ihn (`adoptMcpGroup`) — ein stdio-Prozess je Server-Konfig statt einer je Registry | Accepted |
 | [0070](0070-compact-decision-in-one-component.md) | Compact-Entscheidung zustandsbasiert in EINER Komponente (`HandleToolLoopCompactComponent`: >Budget direkt, >95 % Hint, sonst nichts), Folgen beim Ausführenden — `ranTool`/`isCompactedThisTurn` entfallen; Pre-Turn-Gate bleibt (frische User-Message) — supersedes Teile von 0056 · Budget-Quelle/Pre-Turn-Gate abgelöst durch 0071 | Accepted |
 | [0071](0071-compact-policy-owned-by-delegation.md) | Compact-Policy gehört zur Delegation: 0.7-Faktor lebt in `PoDelegateTool` (vor jeder neuen Sklaven-Aufgabe), der Tool-Loop rechnet nur mit der rohen `autoCompactAfter`; kein Pre-Turn-Gate — Ablösung von Teilen aus 0021/0070 | Accepted |
+| [0072](0072-github-eclipse-repo-cleanup.md) | GitHub/Eclipse-Repo-Cleanup | Accepted |
+| [0073](0073-slf4j-api-stays-bundled.md) | slf4j-api bleibt gebündelt — Platform-Resolve (Require-Bundle + ServiceLoader-Mediator) negativ bewiesen (NOP-Logger für alles slf4j-Logging), Provider-Fund braucht einen Classloader | Accepted |
+| [0074](0074-websearch-eigener-ddg-client.md) | webSearch: eigener dünner DDG-Client statt Community-Modul — Modul verletzt Ehrlichkeits-Regeln strukturell (erfundene Treffer, geschluckte Exceptions, „showing N of M" unmöglich) | Accepted |
+| [0075](0075-last-search-rolling-rohschnitt.md) | Last-Search-Rolling (Da Sniffa): Hot-Block roh auf 10k Zeichen kappen — Fragmente bewusst akzeptiert statt Paar-Grenzen; kein Schalter | Accepted |
+| [0076](0076-compact-reseed-marker-in-user-message.md) | Compact-Reseed ist **eine** UserMessage (Turn-Context zuerst, Marker `Session compacted:` + Summary als letzter Content); die AiMessage-Form ist verworfen — sie ließe den Folge-Request auf einer Assistant-Message enden (Prefill statt Antwort) | Accepted |
 
 
 

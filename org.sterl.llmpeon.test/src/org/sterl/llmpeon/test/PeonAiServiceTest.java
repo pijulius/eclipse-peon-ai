@@ -7,6 +7,7 @@ import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
 import java.io.ByteArrayInputStream;
@@ -20,6 +21,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.ResourcesPlugin;
 import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.core.runtime.Platform;
@@ -43,6 +45,7 @@ import org.sterl.llmpeon.mcp.CodegraphProbe;
 import org.sterl.llmpeon.parts.PeonConstants;
 import org.sterl.llmpeon.parts.ai.CodegraphConnectionService;
 import org.sterl.llmpeon.parts.ai.PeonAiService;
+import org.sterl.llmpeon.parts.ai.component.AgentContextComponent;
 import org.sterl.llmpeon.parts.shared.JdtUtil;
 import org.sterl.llmpeon.parts.tools.AskUserTool;
 import org.sterl.llmpeon.parts.tools.EclipseGrepTool;
@@ -66,13 +69,14 @@ import org.sterl.llmpeon.tool.tools.DiskGrepTool;
 import org.sterl.llmpeon.tool.tools.SearchAgentTool;
 import org.sterl.llmpeon.tool.tools.ShellTool;
 import org.sterl.llmpeon.tool.tools.SkillTool;
-import org.sterl.llmpeon.tool.tools.WebGetTool;
+import org.sterl.llmpeon.tool.web.WebGetTool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.TokenUsage;
@@ -421,6 +425,100 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         // mention (no false-positive), so the reference is re-injected on the second turn.
         streamMock.assertCount("peon-plan/overview.md", 2);
     }
+
+    /**
+     * R-PT-4: archiving releases the in-memory plan reference, so the next handoff cannot see the
+     * moved file as "plan exists" and clear the dev memory for an empty plan.
+     */
+    // R-PT-4
+    // UC-PT-4
+    @Test
+    public void archivedPlanReleasesReferenceNoGhostHandoff() {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        // GIVEN: plan agent active with a saved plan, its memory empty (no chat-plan fallback)
+        aiService.setActiveAgent(AiPlanAgent.NAME);
+        var planTool = aiService.getToolService().getTool(PlanTool.class).orElseThrow();
+        planTool.planSave("# Test Plan\nhandoff must stay honest\n");
+        var devAgent = aiService.getAgents().stream()
+                .filter(a -> AiDevAgent.NAME.equals(a.getName())).findFirst().orElseThrow();
+        devAgent.getMemory().add(UserMessage.from("KEEP ME"));
+        try {
+            // WHEN: the plan is archived and the next handoff runs
+            planTool.planImplemented();
+
+            // THEN: no handoff on an archived plan — and the dev memory survives
+            assertFalse("an archived plan must not hand off", aiService.onHandoff());
+            assertEquals(AiPlanAgent.NAME, aiService.getActiveAgent().getName());
+            assertHasUserMessageWith(devAgent.getMemory().getCopy(), "KEEP ME");
+            assertHasNoUserMessageWith(devAgent.getMemory().getCopy(), PlanTool.OVERVIEW_FILE);
+        } finally {
+            eclipseDeleteResource("/" + PeonTestFixture.PROJECT_NAME + "/" + PlanTool.PLAN_DIR);
+        }
+    }
+
+    /**
+     * R-PT-4 hardening: a plan file deleted outside planImplemented is the same ghost — empty plan
+     * text counts as "no plan", so the dev memory stays and the handoff reports no success.
+     */
+    // R-PT-4
+    // UC-PT-4
+    @Test
+    public void deletedPlanFileHandoffsLikeNoPlan() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        // GIVEN: a live plan reference whose file is then deleted without planImplemented
+        aiService.setActiveAgent(AiPlanAgent.NAME);
+        var planTool = aiService.getToolService().getTool(PlanTool.class).orElseThrow();
+        planTool.planSave("# Test Plan\nnever delivered\n");
+        var devAgent = aiService.getAgents().stream()
+                .filter(a -> AiDevAgent.NAME.equals(a.getName())).findFirst().orElseThrow();
+        devAgent.getMemory().add(UserMessage.from("KEEP ME"));
+        eclipseDeleteResource("/" + PeonTestFixture.PROJECT_NAME + "/" + PlanTool.OVERVIEW_FILE);
+        var planRef = ((AgentContextComponent) readField(aiService, "agentContext")).planRef();
+        assertNotNull("the reference must still be live, otherwise the ghost is not the case under test", planRef);
+        assertFalse("the plan file must be gone", planRef.exists());
+
+        // WHEN
+        boolean handedOff = aiService.onHandoff();
+
+        // THEN: reported as "no plan" — dev memory untouched, agent unchanged
+        assertFalse("an empty plan must never report a successful handoff", handedOff);
+        assertEquals(AiPlanAgent.NAME, aiService.getActiveAgent().getName());
+        assertHasUserMessageWith(devAgent.getMemory().getCopy(), "KEEP ME");
+        assertHasNoUserMessageWith(devAgent.getMemory().getCopy(), PlanTool.OVERVIEW_FILE);
+    }
+
+    /**
+     * R-PT-4 hardening: the reference header of readPlan() must not turn an empty plan into a real
+     * one — the raw file body decides, so an empty overview.md hands off like "no plan" too.
+     */
+    // R-PT-4
+    // UC-PT-4
+    @Test
+    public void emptyPlanFileHandoffsLikeNoPlan() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+        // GIVEN: a live plan reference whose file exists but holds nothing but whitespace
+        aiService.setActiveAgent(AiPlanAgent.NAME);
+        var planTool = aiService.getToolService().getTool(PlanTool.class).orElseThrow();
+        planTool.planSave("# Test Plan\nnever delivered\n");
+        var devAgent = aiService.getAgents().stream()
+                .filter(a -> AiDevAgent.NAME.equals(a.getName())).findFirst().orElseThrow();
+        devAgent.getMemory().add(UserMessage.from("KEEP ME"));
+        eclipseWriteFile("/" + PeonTestFixture.PROJECT_NAME + "/" + PlanTool.OVERVIEW_FILE, "   \n");
+        var planRef = ((AgentContextComponent) readField(aiService, "agentContext")).planRef();
+        assertTrue("the file must exist and be blank, otherwise the header case is not the one under test",
+                planRef.exists() && planRef.readString().isBlank());
+
+        // WHEN
+        boolean handedOff = aiService.onHandoff();
+
+        // THEN: "no plan" — dev memory untouched, agent unchanged
+        assertFalse("an empty plan file must never report a successful handoff", handedOff);
+        assertEquals(AiPlanAgent.NAME, aiService.getActiveAgent().getName());
+        assertHasUserMessageWith(devAgent.getMemory().getCopy(), "KEEP ME");
+        assertHasNoUserMessageWith(devAgent.getMemory().getCopy(), PlanTool.OVERVIEW_FILE);
+    }
+
+
     
     @Test
     public void test_update_token_limit() throws IOException {
@@ -472,9 +570,8 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertTrue("the delegation must still run: " + reply, reply.contains("plan done"));
         assertFalse("seed must be gone after the pre-delegation compact",
                 slave.getMemory().containsUserMessage("seed 0"));
-        assertTrue("the compressor response must have been consumed by the compact",
-                slave.getMemory().getCopy().stream()
-                        .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("compressed summary")));
+        // THEN (R-CC-9): the summary rides in the reseed UserMessage, never as an AiMessage
+        assertHasUserMessageWith(slave.getMemory().getCopy(), "compressed summary");
 
         // AND: autoCompactAfter = 0 (off, R-CIB-1) → no compact, even above the old threshold
         aiService.updateConfig(aiService.getConfig().toBuilder().autoCompactAfter(0).build());
@@ -536,37 +633,41 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
 
         aiService.updateConfig(config);
         aiService.setActiveAgent(AiDevAgent.NAME);
-        aiService.getActiveAgent().getMemory().add(UserMessage.from("Text 1"));
-        aiService.getActiveAgent().getMemory().add(UserMessage.from("Text 2"));
+        // der bereits injizierte Kontext steht als gerenderter Block in der History — nur diese
+        // Form findet der contains-Check wieder (Produktionsform, kein nackter Text)
+        aiService.getActiveAgent().getMemory().add(UserMessage.from(renderedBlock("Text 1")));
+        aiService.getActiveAgent().getMemory().add(UserMessage.from(renderedBlock("Text 2")));
 
-        // WHEN — set turn context supplier and compact to inject items into memory
+        // WHEN — der call(...) ist die einzige Injektionsquelle; ein compact(...) wäre hier ein
+        // SKIPPED_SMALL-No-op (2 Blocks < MIN_COMPACT_MESSAGES) und würde nur eine Wirkung vortäuschen
         aiService.getActiveAgent().setTurnContextSupplier(() -> List.of(
                 new org.sterl.llmpeon.context.SimpleContextItem("Text 1"),
                 new org.sterl.llmpeon.context.SimpleContextItem("Text 2"),
                 new org.sterl.llmpeon.context.SimpleContextItem("Text 3"),
                 new org.sterl.llmpeon.context.SimpleContextItem("Text 3"),
                 new org.sterl.llmpeon.context.SimpleContextItem("Unique")));
-        mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
-        aiService.getActiveAgent().compact(null);
+        mockLlmServer.queueResponse(AiMessage.aiMessage("dedup reply"));
         aiService.getActiveAgent().call("Text 1", null);
         
         // THEN — verify turn context items reached memory and duplicates were handled
         var memory = aiService.getActiveAgent().getMemory().getCopy();
-        var allTexts = memory.stream()
-                .map(m -> org.sterl.llmpeon.shared.ChatMessageUtil.toString(m))
-                .toList();
+        var blocks = blocksOf(memory);
 
         // Text 1 appears at least once (from turn context + call message)
-        assertTrue("Text 1 should appear in memory", allTexts.stream().anyMatch(t -> t.contains("Text 1")));
-        
-        // Text 2 appears once from turn context
-        assertEquals("Text 2 should appear once", 1, allTexts.stream().filter(t -> t.contains("Text 2")).count());
-        
-        // Text 3 was dedupped by restoreTurnContext: only one occurrence despite supplier providing it twice
+        assertTrue("Text 1 should appear in memory", blocks.stream().anyMatch(t -> t.contains("Text 1")));
+
+        // Text 2 steht in genau EINEM Block: der zweite Render darf ihn nicht erneut injizieren
+        // (contains-Check) — mit kaputtem Check wären es zwei Blöcke.
+        assertEquals("Text 2 should appear once", 1, blocks.stream().filter(t -> t.contains("Text 2")).count());
+
+        // Text 3: Message-Granularität, weil die Doppelung aus der Supplier-Liste kommt und
+        // renderTurnContext nur gegen die Memory deduppt — auf Block-Ebene wären es 2.
+        // PO-Entscheidung offen (siehe Bericht), daher hier nicht neu gepinnt.
+        var allTexts = memory.stream().map(ChatMessageUtil::toString).toList();
         assertEquals("Text 3 should appear once (dedupped)", 1, allTexts.stream().filter(t -> t.contains("Text 3")).count());
-        
+
         // Unique appears once
-        assertEquals("Unique should appear once", 1, allTexts.stream().filter(t -> t.contains("Unique")).count());
+        assertEquals("Unique should appear once", 1, blocks.stream().filter(t -> t.contains("Unique")).count());
     }
     
     /** Jon must be the first entry in the agent dropdown. */
@@ -746,7 +847,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
     }
 
     /**
-     * Inc 2 (docs/sklaven-kontext-plan.md): the static context (date/OS + file-access rules) must reach
+     * Inc 2 (org.sterl.llmpeon.core/docs/sklaven-kontext-plan.md): the static context (date/OS + file-access rules) must reach
      * Jon's RAM slaves too — they are not in agentService, so setStaticContext applies it directly.
      */
     @Test
@@ -870,7 +971,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertTrue("Jon needs nextIds", names.contains("nextIds"));
     }
 
-    // --- Agent-Tool-Filter matrix (docs/agent-tool-filter.md) ----------------
+    // --- Agent-Tool-Filter matrix (org.sterl.llmpeon.core/docs/agent-tool-filter.md) ----------------
 
     // UC-TF-1
     // UC-TF-4
@@ -1265,6 +1366,21 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
                 .toList();
     }
 
+    /** Der gerenderte Block eines Turn-Context-Items — die Form, die in der History steht. */
+    private static String renderedBlock(String text) {
+        return new org.sterl.llmpeon.context.SimpleContextItem(text).render().toString();
+    }
+
+    /**
+     * Block-Granularitaet (TextContent) des Memory: seit R-CC-9 traegt EINE UserMessage mehrere
+     * Bloecke, zaehlt eine Injektion pro Message nicht mehr, was pro Block injiziert wurde.
+     */
+    private static List<String> blocksOf(List<ChatMessage> memory) {
+        return memory.stream()
+                .flatMap(m -> ChatMessageUtil.extractMessages(m).stream())
+                .toList();
+    }
+
     private PoDelegateTool jonDelegate() {
         return aiService.getActiveAgent().getToolService().getTool(PoDelegateTool.class).orElseThrow();
     }
@@ -1626,9 +1742,8 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertHasUserMessageWith(memory, "# Docs Index");
         assertHasUserMessageWith(memory, "User selected project:");
 
-        // AND: Summary ist in Memory (als AiMessage)
-        assertTrue("AI summary should be in memory", memory.stream()
-                .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("WHAT: Compressed summary")));
+        // AND: Summary ist im Memory — letzter TextContent der Reseed-UserMessage (R-CC-9)
+        assertHasUserMessageWith(memory, "WHAT: Compressed summary");
 
         // AND: alte Konversation ist weg (check all message texts)
         var allTexts = memory.stream()
@@ -1667,9 +1782,8 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertHasUserMessageWith(memory, "order1: be concise");
         assertHasUserMessageWith(memory, "order2: no filler");
 
-        // AND: Summary (als AiMessage)
-        assertTrue("AI summary should be in memory", memory.stream()
-                .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("compressed")));
+        // AND: Summary — letzter TextContent der Reseed-UserMessage (R-CC-9)
+        assertHasUserMessageWith(memory, "compressed");
 
         // AND: alte Konversation ist weg
         var allTexts = memory.stream()
@@ -1678,18 +1792,23 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         assertHasNoMessageWith(allTexts, "old talk");
     }
 
-    /** Compact does not duplicate existing context (contains-Check). */
+    /**
+     * Compact + der naechste Turn duplizieren einen bestehenden Kontext nicht (contains-Check,
+     * context-architecture.md Lazy-Verhalten). Der naechste Turn ist Teil des Tests: er rendert
+     * denselben Turn-Context erneut — ohne den Check stuende er in zwei Bloecken.
+     */
     @Test
     public void test_compactNoDuplicates() {
         assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
 
-        // GIVEN: Kontext bereits in Memory
+        // GIVEN: Kontext bereits in Memory — 3 Messages, sonst skippt der Compact (R16)
         aiService.setActiveAgent(AiDevAgent.NAME);
         aiService.getActiveAgent().getMemory().clear();
 
         String existingContext = "already in memory";
         aiService.getActiveAgent().getMemory().add(UserMessage.from(existingContext));
         aiService.getActiveAgent().getMemory().add(AiMessage.from("reply"));
+        aiService.getActiveAgent().getMemory().add(AiMessage.from("reply 2"));
 
         aiService.getActiveAgent().setTurnContextSupplier(() -> List.of(new org.sterl.llmpeon.context.SimpleContextItem(existingContext)));
 
@@ -1698,17 +1817,13 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
                 .url(mockLlmServer.getUrl()).build());
         mockLlmServer.queueResponse(AiMessage.aiMessage("compressed"));
 
-        // WHEN: Compact
+        // WHEN: compact re-seedet den Turn-Context, der naechste Turn rendert ihn erneut
         aiService.getActiveAgent().compact(null);
+        mockLlmServer.queueResponse(AiMessage.aiMessage("ok"));
+        aiService.getActiveAgent().call("next turn", null);
 
-        // THEN: Kontext erscheint NUR EINMAL (contains-Check)
-        var memory = aiService.getActiveAgent().getMemory().getCopy();
-        var allTexts = memory.stream()
-                .map(m -> org.sterl.llmpeon.shared.ChatMessageUtil.toString(m))
-                .toList();
-
-        // Count occurrences across all messages
-        long count = allTexts.stream()
+        // THEN: der Kontext steht in genau EINEM Block
+        long count = blocksOf(aiService.getActiveAgent().getMemory().getCopy()).stream()
                 .filter(t -> t.contains(existingContext))
                 .count();
         assertEquals("Context should appear exactly once (no duplicate after compact)", 1, count);
@@ -1743,8 +1858,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         var memory = aiService.getActiveAgent().getMemory().getCopy();
         assertHasUserMessageWith(memory, UserContext.PROJECT_TAG);
         assertHasUserMessageWith(memory, "# Delegation Test");
-        assertTrue("AI summary should be in memory", memory.stream()
-                .anyMatch(m -> m instanceof AiMessage ai && ai.text().contains("WHAT: Delegated summary")));
+        assertHasUserMessageWith(memory, "WHAT: Delegated summary");
     }
     // --- Replica tests: issue-01 / issue-02 / KV-cache (append-only) ------------
 
@@ -2011,9 +2125,10 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             assertHasUserMessageWith(memory, e2);
             assertHasUserMessageWith(memory, e1);
 
-            // AND: der alte Snapshot S1 bleibt unangetastet — genau eine Message mit E1 OHNE E2
-            long oldSnapshotCount = memory.stream()
-                    .map(m -> ChatMessageUtil.toString(m))
+            // AND: der alte Snapshot S1 bleibt unangetastet — genau EIN Block mit E1 OHNE E2.
+            // Block- statt Message-Granularität (R-CC-9): die Reseed-UserMessage trägt den
+            // nächsten User-Turn mit, S1 und S2 leben danach in derselben Message.
+            long oldSnapshotCount = blocksOf(memory).stream()
                     .filter(t -> t.contains(e1) && !t.contains(e2))
                     .count();
             assertEquals("old snapshot must stay exactly once", 1, oldSnapshotCount);
@@ -2094,7 +2209,7 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
         }
     }
 
-    // --- ADR-0042: Project Skill Slot (docs/project-skills.md R2a/R2b/R2c) -------
+    // --- ADR-0042: Project Skill Slot (org.sterl.llmpeon.core/docs/project-skills.md R2a/R2b/R2c) -------
 
     /**
      * ADR-0042 (R2a/R2b): switching the project replaces ONLY the project skill slot — the config
@@ -2148,6 +2263,70 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             if (otherProject.exists()) otherProject.delete(true, true, new NullProgressMonitor());
         }
     }
+
+    /**
+     * R17 wiring guard (production wiring, not the component seam): PeonAiService as the composition
+     * root injects the user skills root {@code ~/.agents/skills} and keeps the deprecated
+     * {@code <configDir>/skills} plus the project root — all three, in ascending precedence.
+     * Paths only: the real {@code ~/.agents/skills} is never read or written.
+     */
+    // R17
+    @Test
+    public void skillService_wiresThreeRoots() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN the deprecated root set through the config path, the project root through setProject
+        aiService.updateConfig(aiService.getConfig());
+        aiService.setProject(project);
+
+        // THEN skillRoot() carries exactly the three responsible roots, ascending precedence
+        var legacyRoot = aiService.getConfig().getConfigDir().resolve(LlmConfig.SKILL_DIRECTORY);
+        var userRoot = Path.of(System.getProperty("user.home")).resolve(SkillService.USER_SKILLS_DIR);
+        var projectRoot = Path.of(JdtUtil.diskPathOf(project)).resolve(SkillService.PROJECT_SKILLS_DIR);
+
+        assertEquals(List.of(legacyRoot, userRoot, projectRoot), aiService.getSkillService().skillRoots());
+    }
+
+    /**
+     * R10/R17 wiring proof on the production seam: the write validator the {@link AiScaffoldAgent}
+     * gets from {@code PeonAiService} carries the real home dir's user skills root. Core tests inject
+     * the root through the setter, so only this one fails if the composition root stops handing it
+     * over. Validator calls only — no file is written, nothing under the home dir is touched.
+     */
+    // R10/R17
+    @Test
+    public void scaffoldWriteValidator_acceptsHomeUserAgentsRoot() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        // GIVEN the scaffold agent of the real wiring (persistent agent — not in getAgent(name))
+        var validator = aiService.getAgents().stream()
+                .filter(AiScaffoldAgent.class::isInstance)
+                .findFirst()
+                .orElseThrow()
+                .getWriteValidator();
+        var home = Path.of(System.getProperty("user.home"));
+
+        // THEN the user skills root is writable — the R17 migration target, and the open project's
+        // skills dir proves the additional-roots supplier is wired at all (R10)
+        validator.validate(home.resolve(SkillService.USER_SKILLS_DIR).resolve("x").resolve("SKILL.md").toString());
+        validator.validate(Path.of(JdtUtil.diskPathOf(project)).resolve(SkillService.PROJECT_SKILLS_DIR)
+                .resolve("x").resolve("SKILL.md").toString());
+
+        // BUT a root is a root, not the home dir: a foreign tool dir and a loose file stay denied
+        try {
+            validator.validate(home.resolve(".claude").resolve("skills").resolve("x.md").toString());
+            fail("a foreign home dir must stay denied");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().startsWith("Write denied"));
+        }
+        try {
+            validator.validate(home.resolve("notes.md").toString());
+            fail("a loose file in the home dir must stay denied");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage().startsWith("Write denied"));
+        }
+    }
+
 
     /**
      * ADR-0042 (R2c, pinning) — service-level contract: the project skill slot is replaced ONLY by
@@ -2224,6 +2403,39 @@ public class PeonAiServiceTest extends AbstractIntegrationTest {
             assertEquals("alpha\n    beta\n", planTool.planRead());
         } finally {
             eclipseDeleteResource("/test_project/" + PlanTool.OVERVIEW_FILE);
+        }
+    }
+
+    /**
+     * R-PT-3: GIVEN a plan that exists only on disk WHEN a turn runs through the real service THEN
+     * the plan reference reaches the LLM request — pins the wiring of the refreshed plan supplier
+     * (PeonAiService -> PlanTool.visiblePlan), not just the mechanism in the component.
+     */
+    // R-PT-3
+    // UC-PT-3
+    @Test
+    public void diskWrittenPlanVisibleInTurnContextThroughTheService() throws Exception {
+        assumeTrue("Eclipse workspace not available", isWorkspaceAvailable());
+
+        var planDir = PeonTestFixture.dir().toPath().resolve(PlanTool.PLAN_DIR);
+        Files.createDirectories(planDir);
+        var overview = planDir.resolve("overview.md");
+        Files.writeString(overview, "# disk written plan\n", StandardCharsets.UTF_8);
+        try {
+            // GIVEN the workspace tree does not know the plan
+            assertFalse("fixture must leave the workspace tree stale, otherwise the refresh is not proven here",
+                    project.getFile(PlanTool.OVERVIEW_FILE).exists());
+
+            // WHEN
+            aiService.call("Ping", null);
+
+            // THEN the turn context carried the plan reference — once, and not from the tree
+            streamMock.assertCount("context: plan /" + PeonTestFixture.PROJECT_NAME + "/"
+                    + PlanTool.OVERVIEW_FILE, 1);
+        } finally {
+            Files.deleteIfExists(overview);
+            Files.deleteIfExists(planDir);
+            project.getFolder(PlanTool.PLAN_DIR).refreshLocal(IResource.DEPTH_INFINITE, new NullProgressMonitor());
         }
     }
 

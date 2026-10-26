@@ -3,6 +3,7 @@ package org.sterl.llmpeon.parts.tools;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IProject;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.runtime.CoreException;
@@ -30,16 +31,24 @@ public class PlanTool extends AbstractEclipseTool {
     public static final String PROBLEM_FILE = PLAN_DIR + "/problem.md";
 
     private final PeonAiService peonAiService;
+    private final PlanFileView view;
 
     public PlanTool(PeonAiService peonAiService) {
+        this(peonAiService, IResource::refreshLocal);
+    }
+
+    public PlanTool(PeonAiService peonAiService, PlanFileView.Refresh refresh) {
         this.peonAiService = peonAiService;
+        this.view = new PlanFileView(refresh);
     }
     
     @Tool("Reads the current saved plan, if one exists.")
     public String planRead() {
-        var project = getProject();
-        var plan = project.getFile(OVERVIEW_FILE);
-        if (plan == null || !plan.exists()) return "No plan exists yet for project: " + JdtUtil.pathOf(plan);
+        var plan = visiblePlan();
+        if (plan == null) {
+            // getProject() keeps the existing contract: no project selected stays an error
+            return "No plan exists yet for project: " + JdtUtil.pathOf(getProject().getFile(OVERVIEW_FILE));
+        }
         return IoUtils.readString(plan);
     }
 
@@ -79,7 +88,8 @@ public class PlanTool extends AbstractEclipseTool {
     public void planImplemented() {
         var project = getProject();
         var plan = project.getFile(OVERVIEW_FILE);
-        if (plan == null || !plan.exists()) return;
+        refreshPlanDir(project);
+        if (!plan.exists()) return;
 
         try {
             var stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm"));
@@ -88,15 +98,25 @@ public class PlanTool extends AbstractEclipseTool {
             var target = project.getFile(PLAN_DIR + "/" + freeName);
             onTool("Plan finished: " + target.getFullPath());
             plan.move(target.getFullPath(), IResource.KEEP_HISTORY, getProgressMonitor());
+            peonAiService.onPlanArchived();
         } catch (CoreException e) {
             throw new RuntimeException("Failed to mark file as done. " + JdtUtil.pathOf(plan) + " " + e.getMessage(), e);
         }
     }
 
     public boolean hasPlan() {
-        if (peonAiService.getProject() == null) return false;
-        var planFile = getProject().getFile(OVERVIEW_FILE);
-        return planFile != null && planFile.exists(); 
+        return visiblePlan() != null;
+    }
+
+    /**
+     * R-PT-3: the plan as the workspace currently sees it — refreshed, never throwing for a failed
+     * refresh, and {@code null} when no project is selected. That makes it usable as the per-turn
+     * plan supplier of {@link org.sterl.llmpeon.parts.ai.component.AgentContextComponent}, so the
+     * turn context and {@link #hasPlan()} cannot drift apart (same view, same depth).
+     */
+    public IFile visiblePlan() {
+        if (peonAiService.getProject() == null) return null;
+        return view.visible(getProject(), getProgressMonitor(), this::onProblem);
     }
 /*
     @Tool("Call this method to indicate that the plan is ready. Call only after all design decisions are resolved.")
@@ -116,6 +136,20 @@ public class PlanTool extends AbstractEclipseTool {
         return "Problem reported. Plan agent will review. " + JdtUtil.pathOf(f);
     }
 */
+    /**
+     * R-PT-1/R-PT-2 (org.sterl.llmpeon/docs/plan-tool.md): a plan last written by the disk tools is
+     * unknown to the workspace tree — without this refresh exists() is a false negative ("No plan
+     * exists yet") and move() fails on a file out of sync with the local file system.
+     */
+    private void refreshPlanDir(IProject project) {
+        var dir = project.getFolder(PLAN_DIR);
+        try {
+            view.refreshDir(project, getProgressMonitor());
+        } catch (CoreException e) {
+            throw new RuntimeException("Failed to refresh " + JdtUtil.pathOf(dir) + " " + e.getMessage(), e);
+        }
+    }
+
     private IProject getProject() {
         var project = peonAiService.getProject();
         if (project == null) {

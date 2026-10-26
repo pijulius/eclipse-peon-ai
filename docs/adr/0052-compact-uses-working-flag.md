@@ -1,6 +1,6 @@
 # ADR-0052 — Compact-Lock: `working`-Flag statt Future-Chain oder eigenem Zustand
 
-**Status:** Accepted (2026-09-22) · **Feature-Doc:** [compact-lock.md](../compact-lock.md)
+**Status:** Accepted (2026-09-22) · **Feature-Doc:** [compact-lock.md](../../org.sterl.llmpeon.core/docs/compact-lock.md)
 
 ## Context
 
@@ -25,6 +25,12 @@ alternativ eine `CompletableFuture`-Chain (Send wartet auf das Compact-Job-Ende)
 4. **Kein eigener `compacting`-UI-State.** `working` ist der Aktivitätsindikator (Roster 🟢) für
    „jede Aktivität" — Paul 2026-09-22: „während ein Agent ein Compact macht ist er working!". Ein
    gelber Ball wäre Kosmetik, bewusst nicht gebaut.
+
+   > **Nachtrag 2026-10-23 — Punkt 4 überholt:** [R-CT-4](../../org.sterl.llmpeon.core/docs/compact-lock.md)
+   > revidiert diese Entscheidung (Paul: „Wir wollen den Status vom Compact setzen.") — der Compact
+   > bekommt einen eigenen Roster-Status 🟡 (`AiAgent.isCompacting()`). **Punkte 1–3 bleiben
+   > gültig:** `working` ist weiter der Lock (CAS, Queue-Guard, Button-Disable); der 🟡 ist reine
+   > Anzeige darüber und ersetzt keinen dieser Mechanismen.
 
 ## Consequences
 

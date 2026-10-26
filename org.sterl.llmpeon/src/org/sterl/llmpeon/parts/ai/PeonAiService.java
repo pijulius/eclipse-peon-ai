@@ -2,6 +2,7 @@ package org.sterl.llmpeon.parts.ai;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -88,6 +89,12 @@ public class PeonAiService {
     private ToolService sharedToolService;
     private AiScaffoldAgent scaffoldAgent;
 
+    /**
+     * R17: the user skills root {@code ~/.agents/skills}. Fixed at the home dir (never a
+     * preference) — the deprecated {@code <configDir>/skills} root follows the preference.
+     */
+    private final Path agentsSkillsDir = Path.of(System.getProperty("user.home")).resolve(SkillService.USER_SKILLS_DIR);
+
     private SkillService skillService;
     private CommandService commandService;
 
@@ -143,7 +150,7 @@ public class PeonAiService {
 
         var config              = configuredModel.getConfig();
         this.configuredModel    = configuredModel;
-        skillService            = new SkillService();
+        skillService            = newSkillService(agentsSkillsDir);
         commandService          = new CommandService();
         sharedTools             = new SharedToolsComponent(skillService, commandService);
         sharedToolService       = sharedTools.toolService();
@@ -172,9 +179,9 @@ public class PeonAiService {
 
         // R15: a successful scaffold disk write deterministically refreshes the skill view.
         scaffoldAgent = new AiScaffoldAgent(configuredModel, skillService);
-        // ADR-0043: the scaffold may write into the .agents/skills dir of every open project
-        // (read at validate time, R10) — in addition to the config dir.
-        scaffoldAgent.setProjectSkillsRootsSupplier(this::projectSkillsRoots);
+        // ADR-0043: the scaffold may write into the user skills root and into the .agents/skills
+        // dir of every open project (read at validate time, R10/R17) — in addition to the config dir.
+        scaffoldAgent.setAdditionalWriteRootsSupplier(this::additionalSkillsWriteRoots);
         scaffoldAgent.addTool(new SkillTool(skillService));
         // ReloadConfigTool needs agentService (already created) + skillService + commandService + config.
         // Its callback fires after the reloadAgents() inside the tool, so wrap it: re-bake the Env
@@ -210,7 +217,8 @@ public class PeonAiService {
         // wired with values + lazy suppliers only (no service dependency). The codegraph item
         // (R-CG-7 / R-CG-12) reads the live state + instructions and is the single codegraph line.
         var codegraphItem = new CodegraphContextItem(codegraph::state);
-        agentContext = new AgentContextComponent(this::getProject, workspaceMemoryTool, userContext,
+        agentContext = new AgentContextComponent(this::getProject, planTool::visiblePlan,
+                workspaceMemoryTool, userContext,
                 scaffoldAgent, sharedToolService,
                 this::getActiveAgent, configuredModel::getConfig, this::getAgents,
                 codegraphItem);
@@ -318,6 +326,18 @@ public class PeonAiService {
         return changed;
     }
 
+    /**
+     * ADR-0043 + R17: the writable skill roots at validate time — the user root, then the
+     * {@code .agents/skills} dir of every open project. The scaffold only learns which roots are
+     * writable, never where they came from.
+     */
+    private List<Path> additionalSkillsWriteRoots() {
+        var roots = new ArrayList<Path>();
+        roots.add(agentsSkillsDir);
+        roots.addAll(projectSkillsRoots());
+        return roots;
+    }
+
     /** ADR-0043: the {@code .agents/skills} dir of every open project, read at validate time (R10). */
     private List<Path> projectSkillsRoots() {
         return EclipseUtil.openProjects().stream()
@@ -325,6 +345,15 @@ public class PeonAiService {
                 .filter(Objects::nonNull)
                 .map(diskPath -> Path.of(diskPath).resolve(SkillService.PROJECT_SKILLS_DIR))
                 .toList();
+    }
+
+    /** R17: the user root loads eagerly with the service — an I/O failure is fatal, reported like {@link #updateConfig(LlmConfig)}. */
+    private static SkillService newSkillService(Path userSkillsDir) {
+        try {
+            return new SkillService(userSkillsDir);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load skills from " + userSkillsDir, e);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -346,10 +375,10 @@ public class PeonAiService {
         String planPath;
         var plan = agentContext.planRef();
         if (plan != null) { // workspace plan ref — not disk, avoids stale project reference
-            planText = agentContext.readPlan();
+            // R-PT-4: the raw file body decides — readPlan() prefixes its header, so an empty
+            // overview.md would never look empty when judged through it
+            planText = agentContext.planContent().isBlank() ? null : agentContext.readPlan();
             planPath = JdtUtil.pathOf(plan);
-
-            agentContext.armHandoffLine(getActiveAgent().getName(), planPath);
         } else {
             var chatPlan = getActiveAgent().getMemory().getLastOf(AiMessage.class);
             if (chatPlan == null) planText = null;
@@ -358,14 +387,17 @@ public class PeonAiService {
             planPath = "Handover from " + getActiveAgent().getName() + ":";
         }
 
-        if (planText != null) {
-            // and directly add the plan too ...
-            toAgent.get().clear();
-            toAgent.get().getMemory().add(UserMessage.from(planPath + System.lineSeparator() + planText));
-            this.agentService.setActiveAgent(toAgent.get());
-        }
+        // R-PT-4: an archived or deleted plan reads back empty — that is "no plan", never a handoff
+        // that clears the target memory and reports success on nothing.
+        if (planText == null || planText.isBlank()) return false;
+
+        if (plan != null) agentContext.armHandoffLine(getActiveAgent().getName(), planPath);
+        // and directly add the plan too ...
+        toAgent.get().clear();
+        toAgent.get().getMemory().add(UserMessage.from(planPath + System.lineSeparator() + planText));
+        this.agentService.setActiveAgent(toAgent.get());
         
-        return planText != null;
+        return true;
     }
 
     // -------------------------------------------------------------------------
@@ -622,6 +654,15 @@ public class PeonAiService {
 
     public void onPlanSaved(IFile planFile) {
         agentContext.setPlan(planFile);
+    }
+
+    /**
+     * R-PT-4 (org.sterl.llmpeon/docs/plan-tool.md): the archive moved the file away, so the
+     * reference is released here — same release as {@code clear()} via {@code agentContext.clearPlan()}
+     * — and a following handoff cannot see a plan that no longer exists.
+     */
+    public void onPlanArchived() {
+        agentContext.clearPlan();
     }
 
     public void clear() {

@@ -20,7 +20,8 @@ Tool-Call und manchmal eine falsche Entscheidung.
 | **Peon-PO** / **Jon** | Der Business-Owner-Agent; besitzt `docs/` (das SOLL), orchestriert Plan + Dev | PO-Agent, Owner, Boss |
 | **Peon-Plan** / **Da Thinka** | Plan-Agent; schreibt ausschließlich `peon-plan/overview.md`, berät verbal | Planner, Architekt |
 | **Peon-Dev** / **Da Mek** | Dev-Agent; schreibt ausschließlich Code | Developer, Coder, Sklave (nur informell) |
-| **Da Sniffa** | Such-Agent (`searchAgent`), read-only, zustandslos, einmalig | Research-Agent, Scout |
+| **Da Sniffa** | Such-Agent (`searchAgent`), read-only; der Loop ist zustandslos (einmalig), Kontinuität nur über den `last-search-rolling`-Block | Research-Agent, Scout |
+| **last-search-rolling** | Rollender Hot-Kontext-Block des Such-Agenten: Frage+finale Antwort der letzten Suchen derselben Chat-View, append-only, 10k-Cap Rohschnitt; Static Message, nie Memory | Such-Historie, Search-Memory |
 | **Da Dok** | Review-Agent (`reviewPlanAgent`), dritter PO-RAM-Sklave (`Peon-Review`), read-only im Code, Verdict ACCEPTED/CONCERNS/REJECTED | Reviewer, QA-Agent, Peon-Review (nur als Agent-ID) |
 | **Da Scribe** | Compact-Agent (`compactSession`) | Compressor, Summarizer |
 | **Custom Agent** | Nutzerdefinierter Agent aus `AGENT.md` mit Frontmatter | User-Agent, eigener Agent |
@@ -80,12 +81,12 @@ entschieden · 🔒 geklärt.
 | **Falsch-Negativ** | Tool meldet „nicht gefunden", obwohl es existiert — der teuerste Tool-Fehler | leeres Ergebnis |
 | **Log-Auszug** (`LogExcerpt`) | Gefilterter und geklemmter Ausschnitt eines Logs samt Header, der gezeigt/gesamt benennt | Log-Snippet, Tail, Ausschnitt |
 | **Refresh-Ziel** | Der Container, der bei leerem Ergebnis synchronisiert wird — **nicht** dasselbe wie der Such-Scope | Refresh-Scope, Sync-Bereich |
-| **Config-Skills** | Skills aus dem geteilten Config-Dir (`~/.peon/skills`) — Basis, in jedem Projekt sichtbar | globale Skills, Basis-Skills |
+| **Config-Skills** | Skills aus den geteilten User-Roots (`~/.agents/skills` Default + Empfehlung seit 2026-10-23, `~/.peon/skills` deprecated aber schreibbar) — Basis, in jedem Projekt sichtbar | globale Skills, Basis-Skills |
 | **Projekt-Skills** | Skills aus `<Projekt>/.agents/skills` (Disk-Pfad) — nur bei gewähltem Projekt sichtbar, **Override** bei Namenskollision | lokale Skills, Project-Skills |
 | **Skill-Component** | Eine vom `SkillService` gehaltene Component mit **immer einem Pfad** (Config- oder Projekt-Skills-Dir); lädt Discover+Parse+Swap selbst — Service tauscht Projekt-Component als Instanz, kein `@Nullable` dir | Skill-Slot (alt), Skill-Dir, Skill-Root |
 | **Tool Allowlist** | Die CSV-Datenliste eines Agenten, die entscheidet, welche Tools aktiv sind — Quelle: UI-Feld (Built-ins, `llm.agent.<id>.tools`) oder `tools:`-Frontmatter (Custom); Matcher ist immer `ToolPolicy` (Prefix, `*`, Negation `!`) | Tool-Filter (als UI-Config), Tool-Auswahl, Tool-Liste |
 | **Negation** | `!`-Präfix auf einem Allowlist-Token: entfernt nach der Allow-Bewertung alle Präfix-Matches — `*, !debugJava*` = alles außer Debug; Ausschluss gewinnt; **nur Negationen** = valide (alles minus Ausschluss) | Exclude, Blacklist, Deny-Liste |
-| **Codegraph** | Lokaler Knowledge-Graph-Server (tree-sitter + SQLite-FTS5, MCP-STDIO, Daemon mit Auto-Sync) — Peon-Built-in-Integration mit Auto-Enable im aktiven Projekt ([codegraph.md](codegraph.md)) | BM25-Suche (technisch falsch), Knowledge-Index, Code-Index |
+| **Codegraph** | Lokaler Knowledge-Graph-Server (tree-sitter + SQLite-FTS5, MCP-STDIO, Daemon mit Auto-Sync) — Peon-Built-in-Integration mit Auto-Enable im aktiven Projekt ([codegraph.md](../org.sterl.llmpeon.core/docs/codegraph.md)) | BM25-Suche (technisch falsch), Knowledge-Index, Code-Index |
 
 
 ## Offen

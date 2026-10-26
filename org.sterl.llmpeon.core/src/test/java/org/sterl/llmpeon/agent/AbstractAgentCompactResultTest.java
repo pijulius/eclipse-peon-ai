@@ -1,10 +1,16 @@
 package org.sterl.llmpeon.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -12,21 +18,32 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.sterl.llmpeon.StreamMock;
+import org.sterl.llmpeon.ai.AgentConfig;
 import org.sterl.llmpeon.ai.AgentModelConfig;
 import org.sterl.llmpeon.ai.ConfiguredChatModel;
 import org.sterl.llmpeon.ai.LlmConfig;
 import org.sterl.llmpeon.compact.CompactConstants;
+import org.sterl.llmpeon.compact.CompactFeedback;
+import org.sterl.llmpeon.exception.ExceptionUtil;
 import org.sterl.llmpeon.model.CompactResult;
 import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.shared.ChatMessageUtil;
+import org.sterl.llmpeon.shared.OnPartialAiResponse;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.model.SimpleMessage;
+import org.sterl.llmpeon.tool.tools.CompactSessionTool;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.PartialResponse;
+import dev.langchain4j.model.chat.response.PartialResponseContext;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.chat.response.StreamingHandle;
 import dev.langchain4j.model.output.TokenUsage;
 
 class AbstractAgentCompactResultTest {
@@ -35,7 +52,8 @@ class AbstractAgentCompactResultTest {
     @Test
     @Timeout(10)
     void skipsSmallContextHonestly() {
-        // GIVEN — only 2 messages: a compact leaves exactly 2 behind, so this is a legitimate no-op
+        // GIVEN — only 2 messages, below MIN_COMPACT_MESSAGES: nothing can be summarized, so this is
+        // a legitimate no-op
         var agent = devAgent();
         agent.addMessage(UserMessage.from("m1"));
         agent.addMessage(AiMessage.from("m2"));
@@ -71,6 +89,9 @@ class AbstractAgentCompactResultTest {
         assertThat(problem.get()).isEqualTo("Compact failed: compressor returned no summary for " + agent.getName());
         // AND — the history is preserved (not cleared on failure)
         assertThat(agent.getMemory().size()).isEqualTo(sizeBefore);
+        // AND — no reinsert marker was written: a failed compact must not claim a compacted state (R-CC-9)
+        assertThat(agent.getMemory().getCopy())
+                .noneMatch(m -> ChatMessageUtil.toString(m).contains(CompactConstants.REINSERT_MARKER));
     }
 
     // R-CC-3
@@ -137,8 +158,8 @@ class AbstractAgentCompactResultTest {
     @Timeout(10)
     void compact_delegatesToEngineAndReseeds() {
         // GIVEN — a real history and a compressor that answers with a summary
-        var agent = devAgent(r -> ChatResponse.builder()
-                .aiMessage(AiMessage.aiMessage("WHAT: Build a Java Hello world application")).build());
+        var summary = "WHAT: Build a Java Hello world application";
+        var agent = devAgent(r -> ChatResponse.builder().aiMessage(AiMessage.aiMessage(summary)).build());
         agent.addMessage(UserMessage.from("Build a Hello world"));
         agent.addMessage(AiMessage.from("In which language?"));
         agent.addMessage(UserMessage.from("In java"));
@@ -148,16 +169,101 @@ class AbstractAgentCompactResultTest {
         // WHEN
         var result = agent.compact(AiMonitor.NULL_MONITOR);
 
-        // THEN — the compact succeeded and the memory is re-seeded to exactly two messages
+        // THEN — the compact succeeded and left exactly ONE message: the re-seeded UserMessage, no
+        // AiMessage — a history ending on an AiMessage would be a prefill stub, not an open turn
         assertThat(result.status()).isEqualTo(CompactResult.Status.COMPACTED);
         var copy = agent.getMemory().getCopy();
-        assertThat(copy).hasSize(2);
-        // AND — the first is the resume UserMessage carrying the re-insert marker (R-CC-9)
+        assertThat(copy).hasSize(1);
         assertThat(copy.get(0)).isInstanceOf(UserMessage.class);
-        assertThat(ChatMessageUtil.toString(copy.get(0))).contains(CompactConstants.REINSERT_MARKER);
-        // AND — the second is the summary as an AI message
-        assertThat(copy.get(1)).isInstanceOf(AiMessage.class);
-        assertThat(((AiMessage) copy.get(1)).text()).contains("WHAT: Build a Java Hello world application");
+        // AND — its LAST TextContent is the marker block: marker, blank line, summary (the one
+        // re-seed form the compact produces)
+        assertThat(UserMessages.lastText((UserMessage) copy.get(0))).isEqualTo(
+                CompactConstants.REINSERT_MARKER + System.lineSeparator() + System.lineSeparator() + summary);
+        // AND — the marker exists exactly once over all message types (ADR-0076)
+        assertThat(copy).filteredOn(m -> ChatMessageUtil.toString(m).contains(CompactConstants.REINSERT_MARKER))
+                .hasSize(1);
+    }
+
+    /**
+     * Paul's E2E check (compact-e2e-issues.md B2): a compact called FROM the tool loop must re-seed
+     * the summary alone — no tool request, no running user text riding on the marker block.
+     */
+    @Test
+    @Timeout(10)
+    void toolTriggeredCompactReseedsMarkerBlockWithItsSummaryOnly() {
+        // GIVEN — a turn whose model calls compactSession; the same mock answers the compressor's
+        // round 2 with the summary and the follow-up round 3 with the final answer
+        var summary = "WHAT: compacted state of the running task";
+        var rounds = new AtomicInteger();
+        var cm = new StreamMock().buildMock(r -> switch (rounds.incrementAndGet()) {
+            case 1 -> ChatResponse.builder().aiMessage(AiMessage.builder()
+                    .toolExecutionRequests(List.of(ToolExecutionRequest.builder()
+                            .id("1").name(CompactSessionTool.NAME).arguments("{}").build()))
+                    .build()).build();
+            case 2 -> ChatResponse.builder().aiMessage(AiMessage.aiMessage(summary)).build();
+            default -> ChatResponse.builder().aiMessage(AiMessage.aiMessage("done")).build();
+        });
+        var agent = new AiDevAgent(new ConfiguredChatModel(LlmConfig.builder().model("mock").build(), cm),
+                new ToolService());
+        agent.addMessage(UserMessage.from("earlier work 1"));
+        agent.addMessage(AiMessage.from("earlier reply 1"));
+        agent.addMessage(UserMessage.from("earlier work 2"));
+        agent.addMessage(AiMessage.from("earlier reply 2"));
+        // the re-seeded memory as it stands the moment the compact reports COMPACTED — before the
+        // tool round's own AiMessage/tool result are added
+        var reseeded = new AtomicReference<List<ChatMessage>>();
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onCompactCompleted(String agentName, CompactResult result, boolean withinTurn) {
+                if (result.status() == CompactResult.Status.COMPACTED) reseeded.set(agent.getMemory().getCopy());
+            }
+        };
+
+        // WHEN — one turn that compacts through the tool
+        agent.call("run the compact now", monitor);
+
+        // THEN — the re-seed is exactly one UserMessage, and its LAST TextContent is marker + summary
+        assertThat(reseeded.get()).hasSize(1);
+        var reseed = (UserMessage) reseeded.get().get(0);
+        assertThat(UserMessages.lastText(reseed)).isEqualTo(CompactConstants.REINSERT_MARKER
+                + System.lineSeparator() + System.lineSeparator() + summary);
+        // AND — nothing of the calling turn is in it: neither the tool request nor the live user text
+        // (B2: a marker alone, the running turn passing for the memory)
+        assertThat(ChatMessageUtil.toString(reseed))
+                .doesNotContain(ChatMessageUtil.TOOL_REQUEST_PREFIX)
+                .doesNotContain("run the compact now")
+                .doesNotContain("earlier work");
+        // AND — the tool round itself still lands BEHIND the re-seed (re-seed + tool request + tool
+        // result + the follow-up answer): the turn is not lost, it just never stands inside the
+        // re-seed message
+        assertThat(agent.getMemory().getCopy()).hasSize(4);
+    }
+
+    /**
+     * A one-word summary is a real compact: the summary reaches the re-seed, and the rounded
+     * `result 0k` in the result line is rounding (chars/1000), never evidence of an empty result.
+     */
+    @Test
+    @Timeout(10)
+    void veryShortSummaryCompactsIntoTheReseedAndReportsResult0k() {
+        // GIVEN — a compressor answering with two characters
+        var agent = devAgent(r -> ChatResponse.builder().aiMessage(AiMessage.aiMessage("ok")).build());
+        addThreeMessages(agent);
+
+        // WHEN
+        var result = agent.compact(AiMonitor.NULL_MONITOR);
+
+        // THEN — COMPACTED with the short summary, and the re-seed carries it
+        assertThat(result.status()).isEqualTo(CompactResult.Status.COMPACTED);
+        assertThat(result.summary()).isEqualTo("ok");
+        var copy = agent.getMemory().getCopy();
+        assertThat(copy).hasSize(1);
+        assertThat(UserMessages.lastText((UserMessage) copy.get(0))).isEqualTo(
+                CompactConstants.REINSERT_MARKER + System.lineSeparator() + System.lineSeparator() + "ok");
+        // AND — the honest IST of the report line: 2 chars render as `result 0k` (StringUtil.toK
+        // rounds down), so `0k` proves nothing about the summary being there
+        assertThat(result.stats().resultChars()).isEqualTo(2);
+        assertThat(result.resultLine()).contains("result 0k");
     }
 
     // R-CC-12
@@ -185,37 +291,105 @@ class AbstractAgentCompactResultTest {
         assertThat(agent.getMemory().getLastProviderInputTokens()).isNull();
     }
 
-    // R-CC-14
+    // R-CT-5
+    // UC-CT-7
     @Test
     @Timeout(10)
-    void compressorChatEventsDoNotReachAgentMonitor() {
-        // GIVEN — a real history and a compressor answering with a summary; the monitor captures
-        // every chat event the agent's monitor would see
+    void compressorRequestStartReachesCallerMonitor() {
+        // GIVEN — a real history and a monitor capturing every caller-side chat event
         var agent = devAgent(r -> ChatResponse.builder()
                 .aiMessage(AiMessage.aiMessage("WHAT: compressor summary")).build());
         agent.addMessage(UserMessage.from("m1"));
         agent.addMessage(AiMessage.from("m2"));
         agent.addMessage(UserMessage.from("m3"));
-        var responses = new ArrayList<SimpleMessage>();
+        var toolLines = new ArrayList<String>();
         var chatRequests = new ArrayList<Integer>();
         var monitor = new AiMonitor() {
-            @Override public void onChatResponse(SimpleMessage m) { responses.add(m); }
+            @Override public void onChatResponse(SimpleMessage m) {}
             @Override public void onChatMessage(int iteration, ChatRequest.Builder request) { chatRequests.add(iteration); }
+            @Override public void onTool(String message) { toolLines.add(message); }
         };
 
         // WHEN
         var result = agent.compact(monitor);
 
-        // THEN — no compressor chat event reaches the agent's monitor (the internal call goes to the log only)
+        // THEN — the compressor's request start reaches the caller: its UI shows the working state
         assertThat(result.status()).isEqualTo(CompactResult.Status.COMPACTED);
-        assertThat(chatRequests).isEmpty();
-        assertThat(responses).noneMatch(m -> m.message() != null && m.message().contains("WHAT: compressor summary"));
+        assertThat(chatRequests).containsExactly(1);
+        // AND — the service adds no line of its own: the compact is the one start line plus its end line
+        assertThat(toolLines).hasSize(2);
+        assertThat(toolLines.getFirst()).startsWith(CompactFeedback.START_PREFIX);
+        assertThat(toolLines.getLast()).contains(CompactFeedback.END_MARKER);
+    }
+
+    // R-CT-5
+    // UC-CT-7
+    @Test
+    @Timeout(10)
+    void requestStartSeenBeforeCompressorCall() {
+        // GIVEN — a caller monitor that flags the request start, and a compressor mock reading that
+        // flag at the moment its own call starts
+        var startSeen = new AtomicBoolean();
+        var seenAtCallTime = new AtomicReference<Boolean>();
+        var cm = new StreamMock().buildMock(r -> {
+            seenAtCallTime.set(startSeen.get());
+            return ChatResponse.builder().aiMessage(AiMessage.aiMessage("WHAT: summary")).build();
+        });
+        var agent = new AiDevAgent(
+                new ConfiguredChatModel(LlmConfig.builder().model("mock").build(), cm), new ToolService());
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onChatMessage(int iteration, ChatRequest.Builder request) { startSeen.set(true); }
+        };
+        addThreeMessages(agent);
+
+        // WHEN
+        var result = agent.compact(monitor);
+
+        // THEN — the mirror happens BEFORE the blocking call: the caller's working state is up while
+        // the (minutes-long) compressor call is still ahead. The count-based test above stays green
+        // when the mirror moves behind the call — this one is what pins the order.
+        assertThat(result.status()).isEqualTo(CompactResult.Status.COMPACTED);
+        assertThat(seenAtCallTime.get()).isTrue();
     }
 
     // R-CC-14
+    // UC-CT-14
     @Test
     @Timeout(10)
-    void startLineEmittedByAgent() {
+    void compressorStreamingReachesCallerMonitor() {
+        // GIVEN — a compact whose compressor streams its summary in two chunks; the caller captures
+        // streaming chunks and chat responses
+        var agent = streamingDevAgent(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("WHAT: compressor summary")).build(), "WHAT: ", "compressor summary");
+        addThreeMessages(agent);
+        var chunks = new ArrayList<String>();
+        var responses = new ArrayList<SimpleMessage>();
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) { responses.add(m); }
+            @Override public void onStreamingChunk(OnPartialAiResponse r) { chunks.add(r.type() + ":" + r.value()); }
+        };
+
+        // WHEN
+        var result = agent.compact(monitor);
+
+        // THEN — the compressor streams live into the caller's monitor, in order (R-CT-8): without the
+        // pass-through only the START of the blocking call arrives
+        assertThat(result.status()).isEqualTo(CompactResult.Status.COMPACTED);
+        assertThat(chunks).containsExactly(
+                "START:null", "ANSWER:WHAT: ", "ANSWER:compressor summary", "END:null");
+        // AND — the text never arrives as a chat response, only as those chunks: the only messages
+        // here are the two compact lines the default onTool forwards (R-CC-14)
+        assertThat(responses).noneMatch(m -> String.valueOf(m.message()).contains("compressor summary"));
+        assertThat(responses).extracting(SimpleMessage::message)
+                .allSatisfy(m -> assertThat((String) m).startsWith("🗜 "));
+    }
+
+    // R-CT-6
+    // UC-CT-9
+    @Test
+    @Timeout(10)
+    void compactStartLineNamesAgent() {
         // GIVEN — a real history (the guard passes) and a monitor capturing the tool lines
         var agent = devAgent();
         agent.addMessage(UserMessage.from("m1"));
@@ -230,10 +404,217 @@ class AbstractAgentCompactResultTest {
         // WHEN
         var result = agent.compact(monitor);
 
-        // THEN — exactly ONE start line, emitted by the agent (after the guard, before the clear)
+        // THEN — one start line and one end line, both emitted by the agent (R-CT-8)
         assertThat(result.status()).isEqualTo(CompactResult.Status.COMPACTED);
+        assertThat(toolLines).hasSize(2);
+        // AND — the start names the agent, so a compact of any trigger is attributable (R-CT-6)
+        assertThat(toolLines.getFirst())
+                .startsWith(CompactFeedback.START_PREFIX + AiDevAgent.NAME + ": 3 messages ")
+                .contains(" tokens (estimate)");
+        // AND — the end names it too, and shows the re-seeded memory: 1 message left
+        assertThat(toolLines.getLast())
+                .startsWith("🗜 " + AiDevAgent.NAME + CompactFeedback.END_MARKER + "3 → 1 messages, ")
+                .endsWith(") " + org.sterl.llmpeon.shared.StringUtil.charsSuffix("summary"));
+    }
+
+    // UC-CT-15
+    @Test
+    @Timeout(10)
+    void failedCompactEmitsNoEndLine() {
+        // GIVEN — a compact that runs but whose compressor returns no summary
+        var agent = devAgent(r -> ChatResponse.builder().aiMessage(AiMessage.aiMessage("")).build());
+        addThreeMessages(agent);
+        var toolLines = new ArrayList<String>();
+        var problems = new ArrayList<String>();
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onTool(String message) { toolLines.add(message); }
+            @Override public void onProblem(String message) { problems.add(message); }
+        };
+
+        // WHEN
+        var result = agent.compact(monitor);
+
+        // THEN — the failure is reported as a problem, and the start line stays the only tool line:
+        // nothing was compacted, so there is nothing to close (R-CT-8)
+        assertThat(result.status()).isEqualTo(CompactResult.Status.FAILED_EMPTY);
+        assertThat(problems).hasSize(1);
         assertThat(toolLines).hasSize(1);
-        assertThat(toolLines.getFirst()).startsWith("🗜 Compressing conversation 3 messages");
+        assertThat(toolLines.getFirst()).startsWith(CompactFeedback.START_PREFIX);
+        assertThat(toolLines).noneMatch(l -> l.contains(CompactFeedback.END_MARKER));
+    }
+
+    // UC-CT-15
+    @Test
+    @Timeout(10)
+    void canceledCompressorCallPropagatesAndEmitsNoEndLine() {
+        // GIVEN — a canceled caller (a Stop) and a provider that streams one partial and then reports
+        // its post-cancel error: the stored cancellation must win over that error, and the compact
+        // never gets a response (StreamingBridgeTest.bug_onErrorAfterCancelMasksCancellation)
+        var canceled = new AtomicBoolean(true);
+        var cm = mock(StreamingChatModel.class);
+        doAnswer(inv -> {
+            var handler = inv.getArgument(1, StreamingChatResponseHandler.class);
+            handler.onPartialResponse(new PartialResponse("WHAT: "),
+                    new PartialResponseContext(mock(StreamingHandle.class)));
+            handler.onError(new RuntimeException("provider error after cancel"));
+            return null;
+        }).when(cm).chat(any(ChatRequest.class), any(StreamingChatResponseHandler.class));
+        var agent = new AiDevAgent(
+                new ConfiguredChatModel(LlmConfig.builder().model("mock").build(), cm), new ToolService());
+        addThreeMessages(agent);
+        var sizeBefore = agent.getMemory().size();
+        var toolLines = new ArrayList<String>();
+        var events = new ArrayList<String>();
+        var problems = new ArrayList<String>();
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onTool(String message) { toolLines.add(message); }
+            @Override public void onCompactCompleted(String agentName, CompactResult result, boolean withinTurn) { events.add(agentName); }
+            @Override public void onProblem(String message) { problems.add(message); }
+            @Override public boolean isCanceled() { return canceled.get(); }
+        };
+
+        // WHEN
+        var thrown = catchThrowable(() -> agent.compact(monitor));
+
+        // THEN — the Stop stays a cancellation (R-CC-7 owns it): it propagates out of the compact
+        // instead of turning into a failure result
+        assertThat(thrown).isInstanceOf(CancellationException.class);
+        assertThat(ExceptionUtil.isCanceled(thrown)).isTrue();
+        // AND — the agent is usable again and the history untouched: the clear happens only after a
+        // response, so an aborted compact keeps every message
+        assertThat(agent.isWorking()).isFalse();
+        assertThat(agent.getMemory().size()).isEqualTo(sizeBefore);
+        // AND — the start line is the only line and no event/problem follows: an aborted compact has no
+        // result to close, and a Stop is not a failure to report
+        assertThat(toolLines).hasSize(1);
+        assertThat(toolLines.getFirst()).startsWith(CompactFeedback.START_PREFIX);
+        assertThat(toolLines).noneMatch(l -> l.contains(CompactFeedback.END_MARKER));
+        assertThat(events).isEmpty();
+        assertThat(problems).isEmpty();
+    }
+
+
+    // R-CT-7
+    // UC-CT-10
+    @Test
+    @Timeout(10)
+    void compactCompletedEventCarriesAgentAndResult() {
+        // GIVEN — a compact that runs and succeeds, its events captured with the working state
+        var succeeded = devAgent(r -> ChatResponse.builder()
+                .aiMessage(AiMessage.aiMessage("WHAT: summary")).build());
+        addThreeMessages(succeeded);
+        var events = new ArrayList<String>();
+
+        // WHEN
+        var result = succeeded.compact(completionMonitor(events, succeeded));
+
+        // THEN — exactly one event naming the agent and its status: the view's reset decision keys on
+        // the name (R-CT-7), it fires only after the working flag is released, and it reports no turn
+        // — this compact ran standalone, so the view rebuilds immediately
+        assertThat(result.status()).isEqualTo(CompactResult.Status.COMPACTED);
+        assertThat(events).containsExactly(AiDevAgent.NAME + "=COMPACTED working=false within=false");
+
+        // WHEN — a compact that runs but gets no summary
+        var failed = devAgent(r -> ChatResponse.builder().aiMessage(AiMessage.aiMessage("")).build());
+        addThreeMessages(failed);
+        var failedEvents = new ArrayList<String>();
+        failed.compact(completionMonitor(failedEvents, failed));
+
+        // THEN — the failure completes too: its caller has a working state to leave (UC-CT-12 keeps
+        // the chat, the reset policy reads this status)
+        assertThat(failedEvents).containsExactly(AiDevAgent.NAME + "=FAILED_EMPTY working=false within=false");
+    }
+
+    // UC-CT-13
+    @Test
+    @Timeout(10)
+    void compactEndLineEmittedAfterCompactCompletedEvent() {
+        // GIVEN — a compact whose completion event and end line land in ONE ordered list
+        var agent = devAgent();
+        addThreeMessages(agent);
+        var order = new ArrayList<String>();
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onTool(String message) {
+                order.add(message.contains(CompactFeedback.END_MARKER) ? "end" : "start");
+            }
+            @Override public void onCompactCompleted(String agentName, CompactResult result, boolean withinTurn) {
+                order.add("completed");
+            }
+        };
+
+        // WHEN
+        var result = agent.compact(monitor);
+
+        // THEN — the end line goes out AFTER the completion event: that event enqueues the chat rebuild
+        // of the shown agent (R-CT-7 NOW) and the display queue runs FIFO, so only this order lets the
+        // line survive the rebuild instead of being reset away with it (R-CT-8)
+        assertThat(result.status()).isEqualTo(CompactResult.Status.COMPACTED);
+        assertThat(order).containsExactly("start", "completed", "end");
+    }
+
+
+    // R-CT-7
+    // UC-CT-10
+    @Test
+    @Timeout(10)
+    void inTurnCompactReportsTurnFlag() {
+        // GIVEN — a turn whose model call compacts the same agent while the turn holds the working
+        // flag: that is exactly where the pre-turn, in-loop and tool triggers run
+        var events = new ArrayList<String>();
+        var agentRef = new AtomicReference<AiDevAgent>();
+        var monitor = new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onCompactCompleted(String agentName, CompactResult result, boolean withinTurn) {
+                events.add(agentName + "=" + result.status() + " within=" + withinTurn);
+            }
+        };
+        var compactedFromTheCall = new AtomicBoolean();
+        var agent = devAgent(r -> {
+            if (compactedFromTheCall.compareAndSet(false, true)) {
+                agentRef.get().compact(monitor); // nested — the turn already owns the flag (R-CT-2)
+            }
+            return ChatResponse.builder().aiMessage(AiMessage.aiMessage("summary")).build();
+        });
+        agentRef.set(agent);
+        addThreeMessages(agent);
+
+        // WHEN — one turn
+        agent.call("go", AiMonitor.NULL_MONITOR);
+
+        // THEN — the event reports the turn: the compact's CAS failed against the turn's flag, and the
+        // view defers its rebuild on this very flag, because until that turn's onCallStart the fresh
+        // message is not in the memory a rebuild would read (F1)
+        assertThat(events).containsExactly(AiDevAgent.NAME + "=COMPACTED within=true");
+    }
+
+    @Test
+    @Timeout(10)
+    void noCompactCompletedOnSkipOrThrow() {
+        // GIVEN — a compact below the minimum: nothing runs
+        var small = devAgent();
+        small.addMessage(UserMessage.from("m1"));
+        small.addMessage(AiMessage.from("m2"));
+        var events = new ArrayList<String>();
+
+        // WHEN
+        assertThat(small.compact(completionMonitor(events, small)).status())
+                .isEqualTo(CompactResult.Status.SKIPPED_SMALL);
+
+        // THEN — no event for a compact that never ran: it would rebuild an untouched chat
+        assertThat(events).isEmpty();
+
+        // WHEN — a compressor call that dies without a response (Log OR throw, R-CC-3)
+        var dying = dyingAgent();
+        assertThatThrownBy(() -> dying.compact(completionMonitor(events, dying)))
+                .isInstanceOf(IllegalStateException.class);
+
+        // THEN — the throw propagates past the event, so no half-run compact reports completion
+        assertThat(events).isEmpty();
+        // AND — the throw still released the working flag: the agent stays usable
+        assertThat(dying.isWorking()).isFalse();
     }
 
     // R-CC-14
@@ -272,7 +653,7 @@ class AbstractAgentCompactResultTest {
     @Test
     @Timeout(10)
     void reinsertedMessagesDoNotTriggerImmediateReCompact() {
-        // GIVEN — a successful compact re-seeds the memory to exactly two messages
+        // GIVEN — a successful compact re-seeds the memory to exactly one message
         var agent = devAgent(r -> ChatResponse.builder()
                 .aiMessage(AiMessage.aiMessage("WHAT: summary")).build());
         agent.addMessage(UserMessage.from("m1"));
@@ -280,9 +661,9 @@ class AbstractAgentCompactResultTest {
         agent.addMessage(UserMessage.from("m3"));
         var first = agent.compact(AiMonitor.NULL_MONITOR);
         assertThat(first.status()).isEqualTo(CompactResult.Status.COMPACTED);
-        assertThat(agent.getMemory().size()).isEqualTo(2);
+        assertThat(agent.getMemory().size()).isEqualTo(1);
 
-        // WHEN — an immediate re-compact: the two reinserted messages are below the minimum
+        // WHEN — an immediate re-compact: the re-seeded message is below the minimum
         var second = agent.compact(AiMonitor.NULL_MONITOR);
 
         // THEN — honestly skipped, not a looping/failed compact
@@ -322,11 +703,51 @@ class AbstractAgentCompactResultTest {
         return new AiDevAgent(new ConfiguredChatModel(config, new StreamMock().buildMock(fn)), new ToolService());
     }
 
+    /** The same, but the answer arrives as streaming chunks first — what the real model does. */
+    private AiDevAgent streamingDevAgent(
+            java.util.function.Function<dev.langchain4j.model.chat.request.ChatRequest, ChatResponse> fn,
+            String... chunks) {
+        var config = LlmConfig.builder().model("mock").build();
+        return new AiDevAgent(new ConfiguredChatModel(config, new StreamMock().buildStreamingMock(fn, chunks)),
+                new ToolService());
+    }
+
     private AiMonitor capturingMonitor(AtomicReference<String> problem, AtomicBoolean canceled) {
         return new AiMonitor() {
             @Override public void onChatResponse(SimpleMessage m) {}
             @Override public void onProblem(String message) { problem.set(message); }
             @Override public boolean isCanceled() { return canceled.get(); }
         };
+    }
+
+    /** Collects every {@code onCompactCompleted} as {@code <agent>=<status> working=<flag at event> within=<turn flag>}. */
+    private AiMonitor completionMonitor(ArrayList<String> events, AiAgent agent) {
+        return new AiMonitor() {
+            @Override public void onChatResponse(SimpleMessage m) {}
+            @Override public void onCompactCompleted(String agentName, CompactResult result, boolean withinTurn) {
+                events.add(agentName + "=" + result.status() + " working=" + agent.isWorking()
+                        + " within=" + withinTurn);
+            }
+        };
+    }
+
+    private void addThreeMessages(AiDevAgent agent) {
+        agent.addMessage(UserMessage.from("m1"));
+        agent.addMessage(AiMessage.from("m2"));
+        agent.addMessage(UserMessage.from("m3"));
+    }
+
+    /** An agent over three messages whose model call returns null — the service throws (R-CC-3). */
+    private AiDevAgent dyingAgent() {
+        var dyingModel = new ConfiguredChatModel(LlmConfig.builder().model("mock").build(),
+                new StreamMock().buildMock(r -> null)) {
+            @Override
+            public ChatResponse callBlocking(ChatRequest req, AgentConfig agent, AiMonitor monitor) {
+                return null;
+            }
+        };
+        var agent = new AiDevAgent(dyingModel, new ToolService());
+        addThreeMessages(agent);
+        return agent;
     }
 }

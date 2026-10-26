@@ -4,9 +4,9 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
-import org.sterl.llmpeon.model.CompactResult;
 import org.sterl.llmpeon.context.ContextItem;
 import org.sterl.llmpeon.memory.ThreadSafeMemory;
+import org.sterl.llmpeon.model.CompactResult;
 import org.sterl.llmpeon.shared.AiMonitor;
 import org.sterl.llmpeon.tool.ToolService;
 import org.sterl.llmpeon.tool.WriteValidator;
@@ -21,6 +21,10 @@ public interface AiAgent {
 
     @Nullable
     ChatResponse call(String message, AiMonitor monitor);
+    
+    //@NotNull
+    //ChatResponse asyncCall(String message, AiMonitor monitor);
+    
     /** Compacts the agent's memory via the compressor.
      * @return {@link CompactResult.Status#COMPACTED} — the memory is already reset and re-seeded
      *         with the summary; {@link CompactResult.Status#SKIPPED_SMALL} — the memory is too
@@ -102,6 +106,15 @@ public interface AiAgent {
 
     /** @return true if the agent is currently processing a call (including internal queue chaining). */
     default boolean isWorking() {
+        return false;
+    }
+
+    /**
+     * @return true while a compact of this agent is actually running (never for a skip) — the
+     *         roster's own Compact-Status 🟡 (R-CT-4, org.sterl.llmpeon.core/docs/compact-lock.md).
+     *         Display state only: {@link #isWorking()} stays the lock. Default false.
+     */
+    default boolean isCompacting() {
         return false;
     }
 
