@@ -5,7 +5,29 @@ All notable changes to Peon AI are documented here. Format loosely follows
 
 Releases before `2.12.4` are documented via [GitHub Releases](https://github.com/sterlp/eclipse-peon-ai/releases).
 
-## [2.15.0] — 2026-10-24
+## [Unreleased]
+
+### Changed
+
+- **Only Jon's build cycle commits automatically.** In a Jon build cycle Da Mek commits and pushes
+  after every green increment (message = functional effect + rule/UC IDs); merging stays your call
+  (default squash). Peon-Dev used directly never commits, pushes or merges unless you ask.
+
+### Fixed
+
+- **Chat no longer clears when a team member starts working.** After a compact, the chat view is
+  rebuilt only when the agent shown in the chat finished compacting — never when a delegated
+  member (or the search agent) starts its own turn. The fresh question stays visible after a
+  pre-turn compact.
+- **"Started HH:MM" stays put.** The status bar shows the turn start of the agent that is working;
+  a compact or cancel inside the turn no longer resets it. A delegated member shows its own start
+  time, and the delegating agent gets its original time back afterwards.
+- **A second context overflow in the same turn is compacted again.** A successful in-loop compact
+  no longer blocks a later one in the same turn. A failed one ends the turn with the error instead
+  of sending calls over budget, and compressor API errors are retried with the turn's normal retry
+  logic.
+
+## [2.15.0] — 2026-10-25
 
 ### Added
 

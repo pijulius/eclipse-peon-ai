@@ -1,90 +1,53 @@
 # Open Ends / Memory — Session-Zwischenstand
 
-> docs/** — insbesondere memory.md — schreibt AUSSCHLIESSLICH Jon. Agenten liefern Facts im Chat.
-> Diese Datei ist ein Zwischenstand, kein Protokoll: Erledigtes fliegt raus.
+> Zwischenstand, kein Protokoll: Erledigtes fliegt raus.
+> Branch `web-factory`.
 
-## 2026-10-25 — RESEED-FORM ✅ single UserMessage (offen: Commit)
+## Jetzt
 
-- **SOLL (R-CC-9, ADR-0076):** nach Compact genau **eine** `UserMessage` — Turn-Context-Blöcke,
-  **letzter** TextContent = `Session compacted:` + Leerzeile + Summary. Kein AiMessage-Zweig
-  (Prefill-Semantik im Tool-Loop, `ThreadSafeMemory.add` joint aufeinanderfolgende UserMessages).
-- **Docs nachgezogen (Jon):** compact.md R-CC-9 (+BDD) · context-message-concept.md (4 Stellen) ·
-  po-agent-jon.md R16-WEIL · compact-architektur.md (Δ + Mermaid) · ADR-0076 (Datei umbenannt) +
-  adr/index.md.
-- **Tests nachgezogen (Da Mek):** 14 Stellen pinnten die alte 2-Message-Form; Helfer
-  `UserMessages.lastText`; neue Tests `toolTriggeredCompactReseedsMarkerBlockWithItsSummaryOnly`,
-  `veryShortSummaryCompactsIntoTheReseedAndReportsResult0k`,
-  `reseededMarkerBlockIsStateAndDropsItsSummaryWhenStaged`. **UNCOMMITTED.**
-- **B2 widerlegt:** `result 0k` = `StringUtil.toK(summary.length())` (jede Summary < 1000 Zeichen);
-  „Marker ohne Summary" war ein Fehllesen des eigenen Prompts. `FAILED_EMPTY` schreibt keinen Marker.
+- **R-CC-18.5 ✅ gebaut + committet:** Commit `28b49cfa` auf `web-factory` (nicht gepusht), Plan
+  archiviert (`peon-plan/overview-done-2026-10-28-14-22.md`, untracked). Core Surefire 1398/0,
+  Da Dok CONCERNS ohne Blocker, Docs geflippt (R-CC-18/18.5/UC-CC-2 ✅). **Paul: squash-merge + release.**
+- **Prompts (nicht committet):** `doc-method.md` + `paco.md` neu, `po.md` (nur Charakter + Rolle),
+  `review-agent.md` neu (Pauls 8 Punkte). **Paul baut Loader:** Jon = `default + po + doc-method +
+  po-delegation`, `doc-method.md` per `PromptLoader.load` (nicht `loadWithDefault`),
+  `AiPoAgentPromptParityTest:27` nachziehen. Paco-Agent = R-PC-1…8 ❌. Web: [aifactory/docs/memory.md](../aifactory/docs/memory.md).
+- **Release (Plugin):** CHANGELOG `[Unreleased]` gepflegt (R-CC-18.5-Zeile im Commit), Paul merged/released.
+- Lint 2026-10-28: Core 157/157 + aifactory 76/76, 0 Befunde.
 
-## 2026-10-25 — Entscheidung: Reseed fällt bei Stufe 1+ heraus (Paul)
+## Offen für Paul (je eine Frage)
 
-- Unter Budget geht der Reseed voll in den nächsten Compact-Input; muss gekürzt werden (Stufe 1+),
-  rendert er **state-only** — die alte Summary fällt heraus. **Paul: bewusst so**, keine
-  Reseed-Ausnahme, keine Kappungs-Sonderregel („nicht verkünsteln") — steht in compact.md R-CC-9.
-- Offen (klein, keine Regel): `result 0k` ist ehrlich gerundet, aber irreführend — Zeichen statt k
-  für < 1000 wäre die Disclosure-Variante. Nicht gebaut.
+1. `docs/memory.md:3-4` (Header-Zitate „Nur Jon schreibt docs/**" / „Paul = Mensch und Da Mek") im
+   Working Tree gelöscht — gewollt? (Diff ist uncommitted, ich habe sie nicht zurückgeschrieben.)
+2. `bugs/compact-regression.md` (205k > 170k): Lauf vor oder nach dem 27.10.? Danach → Restlücke
+   „Budget vs. Modellfenster" als nächster Bug-Zyklus.
+3. Smoke R-CT-7/UC-CT-17 (bleiben ❌): lange Session → Pre-Turn-Compact → Delegation; frischer Chat →
+   erste Runde delegiert; Button-Compact.
+4. `org.sterl.llmpeon.test` baut nicht (`jakarta.annotation [2.1,3)` fehlt im Target) → Plugin-Tests blind.
+5. `non-peon-ai-agents-md/AGENTS*.md` im Arbeitsbaum gelöscht — gewollt?
+6. Merge/Squash `story/night-2026-10-23` + Branch löschen · E2E-Doc-Fixes (`compact-e2e.md`,
+   `search-agent-e2e-test.md`, `webtools-test.md`).
+7. ⏳-Rückversicherungen in [open-points.md](open-points.md) (Delegations-Compact, Briefing-Schema,
+   `codegraph`-Name, R-CG-15, R-CC-19, Windows-`cmd /c`).
+8. Jon-Skill (GitHub) nachziehen: ZU_LANG-Zeile, Produkt-Vision, R15, Auto-Docs klein, doc-method-Split.
+9. Bug-Kandidaten neu in [open-points.md](open-points.md) (totes MCP-Tool in der Spec-Liste,
+   `dispatch`-Catch zu eng) — Triagen im nächsten Bug-Zyklus.
 
-## Offen für Paul (Details: [open-points.md](open-points.md))
+## Backlog
 
-1. ❓ **Merge/Squash** `story/night-2026-10-23` + Branch löschen; danach Reseed-Commit aufsetzen
-   (Branch-IST vorher prüfen, memory-Tool #53: Squash macht die Merge-Base alt).
-2. ❓ **Commit der Reseed-Arbeit** (Docs + Tests + Kommentar-Fixes) — auf welchem Branch?
-3. ❓ **E2E-Doc-Fixes** an `compact-e2e.md`, `search-agent-e2e-test.md`, `webtools-test.md`
-   (Reihenfolge/DDG-Budget, AiMessage-Denke, Cache-Claim) — bereit, warten auf Ja.
-4. ⏳ Delegations-Compact pro Delegation · ⏳ Compact-Briefing-Schema (compressor.md) · ❓ Fixture-Duplikat ·
-   ❓ R-Regeln ohne Linter-Gate · ❓ In-Loop-Direkt-Compact fängt Exceptions nicht ·
-   ⏳ Reserved-Name `codegraph` · ⏳ R-CG-15 Monorepo-State-Refresh · ⏳ R-CC-19-Semantik+Tilde ·
-   ⏳ Windows-`cmd /c`-Fallback · 🔒 S3 (🗜 in PoDelegateTool).
-
-## Ältere, noch offene Fäden (kurz)
-
-- **Bug-Triage 2026-10-24:** T-1 Skill-Routes nach Reload (braucht Details von Paul) · T-1a
-  per-Root-Reload-Output (Ja/Nein offen) · T-4 HTML→Markdown lässt `<pre>` zerfließen (niedrig) ·
-  T-9 Shutdown vs. laufende Jobs (von Paul geparkt, Analyse in
-  [chat-job-lifecycle.md](../org.sterl.llmpeon/docs/chat-job-lifecycle.md)) · T-3 Engine-Seite
-  „kein Retry" untestbar (Follow-up).
-- **E2E-Triage 2026-10-25:** E2 Compact-Hint-Zeile (Paul una responded) · Refresh-Seam-Duplikat
-  (PlanFileView/EclipseWorkspaceReadFileTool → gemeinsame Klasse) · E3/F1/F3 von Paul als egal
-  abgehakt.
-- **Homepage 2.15.0** (webSearch, Compact-Sichtbarkeit, Skill-Roots, last-search-rolling) steht aus.
-- **Doc-Hygiene-Kandidat:** historische `*-plan.md` in `org.sterl.llmpeon*/docs` (z. B.
-  `sklaven-kontext-plan.md`, `agenten-status-im-header-mvp-plan.md`) beschreiben IST/Plan-Stände
-  statt SOLL und tragen alte Namen (`JonDelegateTool`) — Paul entscheidet: löschen oder als
-  historisch markieren.
-
-## Backlog (nächste Session)
-
-- **Async-Shell-Tool — Paul-Prio** (wichtiger als async Agents). Danach async Agents (Top-3 in
-  [async-agents.md](../org.sterl.llmpeon.core/docs/async-agents.md)).
-- **TempFileTool** — Slice 2 Output-Trim 🚧 in design.
-- **Issue #163 („Tool Calls retten")** — ⏳ von Paul geparkt („machen wir nicht aktuell").
-  Recherchiert: langchain4j NICHT das Problem; Gegenmittel = Rescue-Heuristik im ToolService-Loop.
-- Lint-Baseline-Befunde in einen Docs-Zyklus aufnehmen.
-- R-CG-14 (Generation + `disposed` statt Lock) · R-CIB-4 Stufe 2 · R-CC-7 Fehlerklassen-Tabelle
-  ApiRetry (❓) · Header-State-Leak (❓) · Context-Overflow-Zyklus (❓) · McpService
-  `connect()`-Rollback-Test (ADR-0069).
-- **OP-STREAM-1:** Stream-Hänger bei Verbindungsverlust/Notebook-Sleep, keine Aliveness-Erkennung
-  → [streaming-display.md](../org.sterl.llmpeon/docs/streaming-display.md).
-- Klein: Disclosure-Inline-Fragmente in `RollingSearchContextTest` · SkillTool
-  `skillReadFile-diagnosis.md` liegt in `src/main` · allgemeine `tool.tools`-Sortierung
-  (Paul: „bei Zeit") · known-benign-Warnings-Doc.
+- **Async-Shell-Tool (Paul-Prio)**, danach async Agents ([async-agents.md](../org.sterl.llmpeon.core/docs/async-agents.md)).
+- agent-origin (Plugin, später) · Homepage 2.15.0 · Bug-Triage T-1/T-1a/T-3/T-4/T-9 · E2E E2/Refresh-Seam · `result 0k`.
+- Klein: `MutableClock` 7× → Fixture · `AbstractAgent.asyncCall` ohne Aufrufer · Lint-Baseline Core
+  (14 UNBELEGT_ERLEDIGT, 13 VERWAIST UC-DEF-*) · historische `*-plan.md` löschen?
+- aifactory: V6–V10-Folgen in [aifactory/docs/open-points.md](../aifactory/docs/open-points.md),
+  `aifactory-architektur.md` Config-Abschnitt vor Config-Planung.
+- [open-points.md](open-points.md) ist ~400 Zeilen → eigener Aufräum-Zyklus mit Paul.
 
 ## Notizen
 
-- **System-Prompts generisch halten** (Paul 2026-10-20): nichts Repo-Spezifisches, minimale
-  Änderungen, keine Docs-Inhalte — nur Verweise. Übersicht: docs/system-prompts.md.
-- **Commit-Regel:** immer EXPLIZITE Pfadliste (`git add -- docs/ ...`), nie `git add -u`;
-  Pauls WIP nie committen (`README.md`, `peon-plan/`, `ai-e2e-test/**`); Surefire-Ground-Truth +
-  Commit-Hash aktiv einfordern, DONE-Claims gegen den IST prüfen. Evidenz (Surefire-Nummern,
-  Messreihen) nie in docs — Commit-Messages + memory-Tools.
-- **Tool-Trap:** `diskRenameResource` Erfolg melden ohne zu verschieben — nach Renames
-  verifizieren. Edit-Fallen (replaceLines-Insert, Edit-Deletion-Teil-Match): nach JEDEM Edit
-  Zielbereich zurücklesen + Dubletten-Check; Ganzdatei-Rewrites via `diskWriteFile` bevorzugen.
-- **Windows-Falle im Renderer:** in `lineSeparator()`-Strings immer `indexOf('\n')` suchen.
-- **UserMessage-Join in `ThreadSafeMemory.add`:** Seed-Fixtures ggf. `AiMessage` als Trenner.
-- **Docs-Restrukturierung (2026-10-22):** Feature-Doc-Pfade sind modul-qualifiziert
-  (`org.sterl.llmpeon.core/docs/x.md`, `org.sterl.llmpeon/docs/x.md`); ADRs + Root-Docs
-  bleiben in `docs/`. Linter-Discovery findet Modul-Roots automatisch.
-- **Issues/**: asm-Versions-Tabellen (issue-142) sind Fachinhalt, keine Evidenz — bewusst behalten.
+- System-Prompts generisch, keine Sprache/Plattform bevorzugen.
+- Commit: EXPLIZITE Pfadliste; Pauls WIP nie (`README.md`, `peon-plan/`, `ai-e2e-test/**`,
+  `non-peon-ai-agents-md/**`, `pauls-product-vision.md`, `AGENTS*.md`, `bugs/**`).
+- Lint: `docRoots`/`testRoots` immer einschränken. Nach jedem Edit Zielbereich zurücklesen.
+- `ThreadSafeMemory.add` joint UserMessages — Seed-Fixtures mit `AiMessage` trennen.
+- Windows: `indexOf('\n')` in `lineSeparator()`-Strings.

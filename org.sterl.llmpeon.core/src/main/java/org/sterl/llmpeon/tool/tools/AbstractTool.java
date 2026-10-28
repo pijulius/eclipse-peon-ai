@@ -8,7 +8,7 @@ public class AbstractTool implements SmartTool {
 
     protected AiMonitor monitor = AiMonitor.NULL_MONITOR;
     protected ToolLoopRequest request;
-    
+
     protected void onTool(String m) {
         monitor.onTool(m);
     }
