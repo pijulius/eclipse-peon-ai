@@ -1,6 +1,9 @@
 # Proposal: Agenten-Herkunft pro Nachricht — `origin` im Message-Modell
 
-**Status:** 🚧 design  
+**Status:** 🚧 design — Plugin-only, später (Paul 2026-10-27). Dazu eine **Experten-Einstellung „nur finale
+Agenten-Antwort anzeigen"** (Web-Verhalten, siehe `aifactory/docs/web-prototype.md` R-WP-4). Die Web-App braucht
+dieses Proposal nicht (AF-ADR-002). Stärkstes Motiv laut Paul: **Custom Agents** — ihr Name soll an jeder
+Nachricht stehen; eine feste Werkzeug→Name-Tabelle (Web-MVP) kann sie nicht abdecken.  
 **Ziel:** Jede Nachricht, die das UI anzeigt (AI-Text, Tool-Zeile, Problem), trägt ihre **Herkunft** (Agenten-Name) im Core-Message-Modell. Das UI entscheidet selbst, wo es den Namen anzeigt — bei Nachrichten ohne klarem Agenten-Bezug bleibt er `null`/leer, und das UI blendet die Überschrift aus.
 
 ---
@@ -212,6 +215,18 @@ Bisher hatten Tool-Zeilen keine Überschrift. Neu:
 **Gesamt: ~5–8 geänderte core-Dateien, 2–3 geänderte Plugin-Dateien, 1–2 neue Test-Dateien.** Kein neues Package, keine neuen Interfaces.
 
 ---
+
+## 7a. Richtung: Monitor kennt den aktuellen Agenten (Paul 2026-10-27)
+
+Jedes Monitor-Event soll künftig den **aktuellen Agenten** tragen — nicht nur Chat-Zeilen, auch
+`onCallStart`/`onChatMessage`/`onStreamingChunk`. Heute feuert ein delegierter Sklave diese Events
+anonym auf dem Monitor des Delegierenden; die Chat-View muss den Absender darum am Memory erraten
+([R-CT-7](../org.sterl.llmpeon.core/docs/compact-lock.md)). Mit Absender am Event wird R-CT-7 einfacher.
+
+Leitplanken aus dem Review des Web-Baus (2026-10-27): **kein** zweiter Abschluss-Kanal
+(`onAgentCallCompleted` — Turn-Ende = Rückkehr von `call()`), **kein** Delegations-Antwort-Event
+(`onDelegatedAnswer`), **keine** Reflection im Wrapper. Ort des Stempelns offen: Nachricht
+(`SimpleMessage.origin`) vs. Decorator an der Delegationsgrenze (`PoDelegateTool`/`SearchAgentTool`).
 
 ## 8. Offene Punkte
 

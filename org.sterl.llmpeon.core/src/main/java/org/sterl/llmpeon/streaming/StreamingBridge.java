@@ -28,27 +28,25 @@ import dev.langchain4j.model.chat.response.StreamingHandle;
 /**
  * Bridges langchain4j streaming to the blocking {@link AiMonitor} contract.
  * <p>
- * One instance is created per user request and reused across all tool-loop
- * iterations so that {@code startedAt} spans the entire turn. Each call to
- * {@link #call} resets per-call state (latch, refs, timing) but keeps {@code startedAt}.
+ * One instance is reused across all tool-loop iterations of a request. The bridge knows no turn:
+ * the caller passes the agent-owned turn start (R20) to every {@link #call}, and each call resets
+ * the per-call state (latch, refs, timing).
  * <p>
- * Timing: four {@link Timer}s track the prompt phase (reset+start per call, stopped at the
- * first partial), the think phase (reset+start per call, stopped at the first thinking), the
- * token phase (started at the first partial, stopped at completion) and the total phase
- * (started at construction, never stopped — there is no turn-end signal). Chunks carry the
+ * Timing: three {@link Timer}s track the prompt phase (reset+start per call, stopped at the
+ * first partial), the think phase (reset+start per call, stopped at the first thinking) and the
+ * token phase (started at the first partial, stopped at completion). Chunks carry the
  * stamped {@code tokenPhaseStart}, never the live timers.
  * <p>
  * Cancel: every partial callback checks {@link AiMonitor#isCanceled()} and calls
  * {@link StreamingHandle#cancel()} immediately when true.
  * 
- * @deprecated will be replaced by {@link AsyncStreamingBridge}
+ * Maybe replaced by {@link AsyncStreamingBridge}.
  */
 public class StreamingBridge implements StreamingChatResponseHandler {
 
     private final Clock clock;
-    private final Instant startedAt;
+    private volatile Instant startedAt;
 
-    private final Timer totalTimer;
     private final Timer ppTimer;
     private final Timer tokenTimer;
     private final Timer thinkTimer;
@@ -60,13 +58,9 @@ public class StreamingBridge implements StreamingChatResponseHandler {
 
     StreamingBridge(Clock clock) {
         this.clock = clock;
-        this.startedAt = Instant.now(clock);
-        this.totalTimer = new Timer(clock);
         this.ppTimer = new Timer(clock);
         this.tokenTimer = new Timer(clock);
         this.thinkTimer = new Timer(clock);
-        // The total timer spans the whole bridge lifetime — there is no turn-end signal (D3).
-        this.totalTimer.start();
     }
 
     // Per-call state — reset at the top of each call()
@@ -78,11 +72,12 @@ public class StreamingBridge implements StreamingChatResponseHandler {
 
     /**
      * Executes one streaming LLM call and blocks until complete or error.
-     * {@code startedAt} is set at construction (turn start) and kept across all calls of this turn.
+     * {@code startedAt} is the caller's (agent-owned) turn start, shown in every chunk of this call.
      * 
      * @throws CancellationException if canceled
      */
-    public ChatResponse call(StreamingChatModel model, ChatRequest request, AiMonitor monitor) {
+    public ChatResponse call(StreamingChatModel model, ChatRequest request, AiMonitor monitor, Instant startedAt) {
+        this.startedAt = startedAt;
         this.latch = new CountDownLatch(1);
         this.responseRef = new AtomicReference<>();
         this.errorRef = new AtomicReference<>();
@@ -202,7 +197,6 @@ public class StreamingBridge implements StreamingChatResponseHandler {
     }
 
     // Package-private accessors for tests.
-    Timer totalTimer() { return totalTimer; }
     Timer ppTimer() { return ppTimer; }
     Timer tokenTimer() { return tokenTimer; }
     Timer thinkTimer() { return thinkTimer; }

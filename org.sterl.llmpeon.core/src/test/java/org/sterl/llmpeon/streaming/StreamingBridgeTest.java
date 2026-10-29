@@ -35,10 +35,10 @@ import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.chat.response.StreamingHandle;
 
 /**
- * One {@link StreamingBridge} is created per turn and reused across all tool-loop
- * iterations, so {@code startedAt} must span the whole turn — the UI "working since Xs"
- * must not jump on every tool-loop LLM call. The per-call {@code tokenPhaseStart} and the
- * four {@link org.sterl.llmpeon.shared.Timer}s must reset per call. See org.sterl.llmpeon/docs/streaming-display.md.
+ * The bridge knows no turn (R20): {@code startedAt} is what the caller passes — the agent owns the
+ * turn start, so the UI "working since Xs" does not jump on a tool-loop call or a compact. The
+ * per-call {@code tokenPhaseStart} and the three {@link org.sterl.llmpeon.shared.Timer}s must reset
+ * per call. See org.sterl.llmpeon/docs/streaming-display.md.
  */
 class StreamingBridgeTest {
 
@@ -73,26 +73,27 @@ class StreamingBridgeTest {
     // Tests
     // -------------------------------------------------------------------------
 
+    // R20
     @Test
-    void startedAtSpansWholeTurn() {
-        // GIVEN a bridge whose clock is fixed at the turn start T0
+    void startedAtIsWhatTheCallerPasses() {
+        // GIVEN — a bridge whose own clock runs hours away from the turn start the caller owns
         var clock = new MutableClock();
         var bridge = new StreamingBridge(clock);
         var model = completeModel();
         var monitor = new StartRecorder();
         var request = new ChatRequest.Builder().messages(UserMessage.from("hi")).build();
+        var turnStart = T0.minus(Duration.ofDays(1));
 
-        // WHEN the first LLM call of the turn runs
-        bridge.call(model, request, monitor);
-        // THEN its START chunk carries the turn start
-        assertThat(monitor.starts.get(0)).isEqualTo(T0);
-
-        // WHEN the turn has been running for an hour and a tool-loop iteration triggers call 2
+        // WHEN — two calls of one turn an hour apart, the caller passing its turn start each time
+        bridge.call(model, request, monitor, turnStart);
         clock.advance(Duration.ofHours(1));
-        bridge.call(model, request, monitor);
+        bridge.call(model, request, monitor, turnStart);
+        // AND — a call of another turn
+        var otherTurn = T0.minus(Duration.ofDays(2));
+        bridge.call(model, request, monitor, otherTurn);
 
-        // THEN startedAt is still the turn start — it must NOT jump to call 2's start
-        assertThat(monitor.starts.get(1)).isEqualTo(T0);
+        // THEN — every START chunk shows exactly what the caller passed, never the bridge's clock
+        assertThat(monitor.starts).containsExactly(turnStart, turnStart, otherTurn);
     }
 
     @Test
@@ -101,7 +102,7 @@ class StreamingBridgeTest {
         var bridge = new StreamingBridge(clock);
         var monitor = new ChunkRecorder();
 
-        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor);
+        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor, T0);
 
         // THEN the START chunk is first and its token phase has not started yet
         assertThat(monitor.chunks.get(0).type()).isEqualTo(OnPartialAiResponse.Type.START);
@@ -111,16 +112,17 @@ class StreamingBridgeTest {
     @Test
     void partialChunkTokenPhaseStartIsCallStartNotTurnStart() {
         var clock = new MutableClock();
-        var bridge = new StreamingBridge(clock); // turn start = T0
+        var bridge = new StreamingBridge(clock);
         var monitor = new ChunkRecorder();
 
-        // WHEN the call starts one hour after the turn began
+        // WHEN the call starts one hour after the turn began (turn start T0 handed in explicitly)
         clock.advance(Duration.ofHours(1));
-        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor);
+        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor, T0);
 
         // THEN the partial's tokenPhaseStart is the call start (T0+1h), NOT the turn start (T0)
         var partial = monitor.chunks.get(1);
         assertThat(partial.type()).isEqualTo(OnPartialAiResponse.Type.ANSWER);
+        assertThat(partial.startedAt()).isEqualTo(T0);
         assertThat(partial.tokenPhaseStart()).isEqualTo(clock.millis());
         assertThat(partial.tokenPhaseStart()).isNotEqualTo(partial.startedAt().toEpochMilli());
     }
@@ -132,10 +134,10 @@ class StreamingBridgeTest {
         var monitor = new ChunkRecorder();
 
         // WHEN the same bridge runs two calls an hour apart
-        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor);
+        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor, T0);
         long first = monitor.chunks.get(1).tokenPhaseStart();
         clock.advance(Duration.ofHours(1));
-        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor);
+        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor, T0);
         long second = monitor.chunks.get(4).tokenPhaseStart();
 
         // THEN each call stamped its own call start — call 2's is not call 1's
@@ -150,7 +152,7 @@ class StreamingBridgeTest {
         var monitor = new ChunkRecorder();
 
         // WHEN a call streams a 30s prompt phase then a 20s token phase
-        bridge.call(answerModel(clock, Duration.ofSeconds(30), Duration.ofSeconds(20)), request("hi"), monitor);
+        bridge.call(answerModel(clock, Duration.ofSeconds(30), Duration.ofSeconds(20)), request("hi"), monitor, T0);
 
         // THEN the prompt timer froze at 30s and the token timer at 20s, both stopped
         assertThat(bridge.ppTimer().millis()).isEqualTo(30_000);
@@ -168,9 +170,9 @@ class StreamingBridgeTest {
         var monitor = new ChunkRecorder();
 
         // WHEN call 1 has a 30s prompt phase, then call 2 (an hour later) has a 10s prompt phase
-        bridge.call(answerModel(clock, Duration.ofSeconds(30), Duration.ofSeconds(20)), request("hi"), monitor);
+        bridge.call(answerModel(clock, Duration.ofSeconds(30), Duration.ofSeconds(20)), request("hi"), monitor, T0);
         clock.advance(Duration.ofHours(1));
-        bridge.call(answerModel(clock, Duration.ofSeconds(10), Duration.ofSeconds(5)), request("hi"), monitor);
+        bridge.call(answerModel(clock, Duration.ofSeconds(10), Duration.ofSeconds(5)), request("hi"), monitor, T0);
 
         // THEN the prompt timer reflects only call 2's 10s — not call 1's 30s, not accumulated
         assertThat(bridge.ppTimer().millis()).isEqualTo(10_000);
@@ -183,7 +185,7 @@ class StreamingBridgeTest {
         var monitor = new ChunkRecorder();
 
         // WHEN the model emits a thinking partial after a 15s prompt phase
-        bridge.call(thinkModel(clock, Duration.ofSeconds(15), Duration.ofSeconds(10)), request("hi"), monitor);
+        bridge.call(thinkModel(clock, Duration.ofSeconds(15), Duration.ofSeconds(10)), request("hi"), monitor, T0);
 
         // THEN the think timer froze at 15s (call start → first thinking) and stopped
         assertThat(bridge.thinkTimer().millis()).isEqualTo(15_000);
@@ -197,7 +199,7 @@ class StreamingBridgeTest {
         var monitor = new ChunkRecorder();
 
         // WHEN a call streams an answer without any thinking
-        bridge.call(answerModel(clock, Duration.ofSeconds(5), Duration.ofSeconds(5)), request("hi"), monitor);
+        bridge.call(answerModel(clock, Duration.ofSeconds(5), Duration.ofSeconds(5)), request("hi"), monitor, T0);
 
         // THEN the think timer was never stopped
         assertThat(bridge.thinkTimer().running()).isTrue();
@@ -209,27 +211,12 @@ class StreamingBridgeTest {
         var bridge = new StreamingBridge(clock);
         var monitor = new ChunkRecorder();
 
-        bridge.call(toolModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor);
+        bridge.call(toolModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor, T0);
 
         // THEN the TOOL chunk carries the argument delta, not the repeated tool name
         var tool = monitor.chunks.get(1);
         assertThat(tool.type()).isEqualTo(OnPartialAiResponse.Type.TOOL);
         assertThat(tool.value()).isEqualTo("{\"q\":\"hi\"}");
-    }
-
-    @Test
-    void totalTimerRunsThroughBridgeLifetime() {
-        var clock = new MutableClock();
-        var bridge = new StreamingBridge(clock);
-        var monitor = new ChunkRecorder();
-        clock.advance(Duration.ofSeconds(45));
-
-        // WHEN a full call runs
-        bridge.call(answerModel(clock, Duration.ZERO, Duration.ZERO), request("hi"), monitor);
-
-        // THEN the total timer still runs — it is never stopped (no turn-end signal)
-        assertThat(bridge.totalTimer().running()).isTrue();
-        assertThat(bridge.totalTimer().millis()).isGreaterThanOrEqualTo(45_000);
     }
 
     /**
@@ -255,7 +242,7 @@ class StreamingBridgeTest {
         var bridge = new StreamingBridge(new MutableClock());
 
         // WHEN + THEN — the documented contract: a canceled call surfaces as CancellationException
-        assertThatThrownBy(() -> bridge.call(cm, request("hi"), monitor))
+        assertThatThrownBy(() -> bridge.call(cm, request("hi"), monitor, T0))
                 .isInstanceOf(CancellationException.class);
     }
 

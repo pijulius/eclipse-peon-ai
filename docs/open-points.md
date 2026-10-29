@@ -85,10 +85,6 @@ Geklärte Punkte ohne eigenes Feature-Doc: [resolved-points.md](resolved-points.
   SOLL geschrieben: Verbindung bleibt, State-Refresh auf B. Nebenwirkung, die Paul kennen sollte:
   jeder Projektwechsel mit gemeinsamem Index erzeugt **eine neue Chat-Zeile** (Dedup-Key ändert sich);
   Alternative wäre ein Live-Projekt im Item (dann zwei Wahrheiten: State + Supplier).
-- ❓ **In-Loop-Direkt-Compact fängt Exceptions nicht (Nachbarloch von R-CC-20.5):** wirft der Compressor
-  im Tool-Loop (`HandleToolLoopCompactComponent.handle` → `agent.compact()`), stirbt der ganze Turn —
-  seit R-CC-18. Nichts geht verloren (Messages sind im Memory), aber der gleiche Fehler, der R-CC-20.5
-  heilt, gehört auch hier hin. Scope bewusst nicht im R-CC-20.5-Fix erweitert.
 - ⏳ **R-CG-14 Fix-Mechanik präzisiert:** der Reviewer schlug „Adopt und Disconnect über denselben
   Lock" vor — Jon: **nein**, ein Lock über `service.connect()` lässt Dispose auf einen 5–10-s-Spawn
   warten. Spezifiziert: Generation + `disposed`-Flag, Prüfung nach dem Connect, Lock nur um den
@@ -395,3 +391,13 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
 - ⏳ **Homepage-Update für 2.15.0 steht aus** (webSearch, Compact-Sichtbarkeit, Skill-Roots,
   last-search-rolling wirkt nur im Agenten — evtl. kurz erwähnen): AGENTS.md verlangt User-Updates
   im selben Inkrement, der Nachtzyklus hat sie ausgelassen. Nachholen vor/vom Release.
+## 2026-10-28 — Bug-Kandidaten aus dem R-CC-18.5-Zyklus (Delegations-Blocker)
+
+- ❓ **Totes MCP-Tool bleibt in der Spec-Liste:** Ist ein MCP-Server nicht erreichbar, bleiben seine
+  Tools angeboten — jeder Agent-Turn verbrennt Runden am toten Tool (`Tool failed - check why and
+  inform user …` statt Ergebnis). Fix-Idee: tote Gruppe → Specs raus + einmal `onProblem`. Passend
+  zur Repo-Regel „A tool must never lie" — diesmal auf der Angebotsseite. Ursprung: Delegations-
+  Blocker 2026-10-28 (tatsächliche Ursache war API-Down; der Befund bleibt gültig).
+- ❓ **`PoDelegateTool.dispatch` fängt nur `IllegalStateException`** (`PoDelegateTool.java:267`):
+  andere RuntimeExceptions schlagen als roher Stacktrace-Dump zum PO durch statt als ehrliche
+  Meldung „Delegation nicht möglich: <Grund>". Beide im nächsten Bug-Zyklus triagen.
