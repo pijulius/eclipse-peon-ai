@@ -3,39 +3,37 @@
 Status je Punkt: ❓ offen · ⏳ selbst entschieden (Rückversicherung mit User steht aus) · 🔒 geklärt.
 Geklärte Punkte ohne eigenes Feature-Doc: [resolved-points.md](resolved-points.md).
 
+## 2026-10-29 — R-AEM-3 Trigger-Entscheidung (Jon autonom aus Pauls Zweckvorgabe)
+
+- 🔒 **Trigger „nutzlose Message" = blank ODER Message == Cause-Klassenname (JDK-Envelope):** die
+  ursprüngliche reine Blank-Bedingung war nach Messung im Produktionspfad unwirksam (refused kommt
+  als `CompletionException`-Envelope mit bloßem Klassennamen durch). **Paul bestätigt 2026-10-29.**
+  Mid-Stream-`"closed"` und verschachtelte Envelopes bewusst außen (Revisit mit R-CC-7).
+
+## 2026-10-29 — Neue Regel-Kandidatin: „Wir werfen keine Fehler ohne Message" (Paul)
+
+- ❓ **Alle eigenen `throw new X(...)` sollen eine inhaltvolle Message tragen** (was, wo, warum) —
+  R-AEM-3 (URL-Enrichment am Choke-Point) ist der Spezialfall für die Wrapper-Grenze. Paul
+  2026-10-29: „wir werfen keine Fehler ohne message" — als TODO aufgeschrieben, **nicht jetzt
+  gebaut**. Bei der Ausarbeitung: Inventar der message-losen Throws (VOLL-Grep), SOLL-Regel
+  (vermutlich [ground-rules.md](../org.sterl.llmpeon.core/docs/ground-rules.md)), dann Batches.
+
+## 2026-10-29 — Warnungs-Aufräum-Zyklus (Paul: „die Warnungen müssen aus dem Code")
+
+- ❓ **Eclipse-Compiler-/Null-Analysis-Warnungen aus core + plugin räumen** — „das Projekt verkommt".
+  Verabredeter Ablauf (Paul 2026-10-29, **nicht jetzt gestartet**): eigener Branch, **Inkrement 1 =
+  VOLL-Inventar + Triage-Liste, nichts ändern** (Paul will erst sehen, was da ist), dann Batches je
+  Warnklasse. Verwandt: die uncommitteten `@SuppressWarnings("null")`-IDE-Quickfixes in
+  `ExceptionUtil.java`, `ToolService.java`, `ShellTool.java`, `AgentToolConfigTest.java`,
+  `DefaultCodegraphProbeTest.java` (2026-10-29, 11:52) — im selben Zyklus klären (behalten als
+  bewusste Suppress oder Issue fixen; `@SuppressWarnings` nie als Dämpfer gegen echten Befund).
+
 ## Release-Doku-Auflösung (2026-10-20) — github-eclipse-repo.md aufgelöst (ADR-0072)
 
-- ❓ **JAR-Signing:** Update-Site-Plugins sind unsigniert — Eclipse warnt beim Install. Sign-Zertifikat besorgen und release.yml erweitern? Aufwand vs. Nutzen klären.
-- ❓ **Auto-Create GitHub Releases:** `release.yml` deployt nur die Pages-Site, erzeugt aber kein GitHub Release (Changelog/Asset). Soll ein Release-Step (Tag → Release, Binary-Attach) dazu?
-- ⏳ **p2-Pfad-Verifikation:** **Update-Site bestätigt (Paul 2026-10-21): `https://sterlp.github.io/eclipse-peon-ai/`** — `p2.index` dort 200 (2026-10-19 gemessen); `https://peon-ai-4e.sterl.org/p2.index` → 404 (Root = VitePress-Homepage). Homepage-Installation + Skill `peon-release` sind darauf umgestellt. **Rückversicherung:** nach dem nächsten Release messen, wohin `deploy-pages` die Update-Site tatsächlich legt (sterl.org oder github.io), und SKILL + Homepage-Installation abgleichen.
 - ⏳ **Compact-Briefing-Schema (compressor.md):** 3 Ergänzungen vorgeschlagen — STANDING-RULES-Slot
   (Pauls dauerhafte Verhaltensregeln als eigener Block), preserve-Pfade erweitern, memory.md =
   complement-not-replace (Briefing ergänzt memory.md, ersetzt es nicht). Freigabe Paul steht aus.
 
-
-## 2026-10-23 — Issue #163 „Tool Calls retten" (low prio, Backlog)
-
-- ❓ **Rescue-Heuristik für „Tool-Call als Text":** Recherche (2026-10-23) bestätigt: **langchain4j
-  ist nicht das Problem** — alle drei Provider mappen ausschließlich strukturierte Tool-Call-Felder
-  (OpenAI `OpenAiUtils.java:514-534`, Anthropic `AnthropicMapper.java:392-406`, Ollama
-  `InternalOllamaHelper.java:92-100`); ein Call, der als Fließtext mit XML-artigen Function-Tags
-  ankommt, ist korrekt verarbeiteter Text — das Modell hat das Protokoll nicht benutzt (schwache/
-  lokale Modelle, Unicode-fragil — exakt Pauls ASCII-vs-Unicode-Beobachtung). **Kein Upstream-Issue.**
-  Gegenmittel bei uns: Rescue-Heuristik im `ToolService`-Loop (vor dem „nur Text"-Exit
-  `ToolService.java:197-200`): erkennt `function=<registrierterName>`-Text, baut daraus
-  `ToolExecutionRequest` und führt ihn regulär aus (nur registrierte Tool-Namen = kein
-  False-Positive-Risiko). Aufwand klein–mittel (~60–100 Zeilen + Tests). System-Prompt-Stabilisierung
-  optional dahinter, aber unzuverlässig. **Paul entscheidet, ob/wann gebaut wird.**
-  Ticket-Beschreibung gehört ins GitHub-Issue #163 (Body schreibt Paul selbst; das frühere
-  Datei-Draft ist gelöscht).
-
-## 2026-10-23 — webSearch: Snippet-Kappungs-Disclosure (Story 1, Nachtzyklus)
-
-- ⏳ **Snippet-Kürzung ohne extra Disclosure:** Da-Dok-Review (F5) fragte an, ob das `…` allein
-  genügt. Ich habe als PO aus der AGENTS.md-Regel („jede Truncation ist im eigenen Output
-  benannt") abgeleitet: bei mindestens einer gekürzten Snippet-Zeile kommt eine Footer-Zeile
-  `snippets truncated to 200 characters` (gebaut, getestet, `// R-WEB-10`). **Rückversicherung:**
-  Paul bestätigt die Zeile — oder will sie wieder raus (dann wäre `…` die alleinige Kennzeichnung).
 
 ## 2026-10-23 — Compact-UI: Deferred-Reset für Turn-Compacts (Story 2, Nachtzyklus)
 
@@ -47,13 +45,6 @@ Geklärte Punkte ohne eigenes Feature-Doc: [resolved-points.md](resolved-points.
   → NOW, Sklaven → NONE. `CompactFeedback.resetTiming`, gebaut + gemutiert (Inc 5 `6382e808`).
   **Rückversicherung:** Paul bestätigt das Deferred-Timing (Smoke-Punkt 3 in memory.md §8) — oder
   will Sofort-Rebuild mit Re-Append des User-Echos.
-
-## 2026-10-23 — Skill-Roots: First-Launch-Verzeichnis (Story 3, Nachtzyklus)
-
-- ⏳ **First-Launch legt weiter `~/.peon/skills` an:** `LlmPreferenceInitializer.buildConfigDirs()`
-  bleibt unverändert (Story-3-Entscheid, Q2 — Doc sagt „fehlendes Dir = leer, kein Fehler", `diskWriteFile`
-  legt Elternordner selbst an). **Rückversicherung:** Soll der First-Launch stattdessen (oder zusätzlich)
-  `~/.agents/skills` anlegen, oder gar kein Skills-Dir mehr vorsorglich erzeugen?
 
 ## 2.14.0 (2026-10-19) — Jon-Entscheidungen zur Rückversicherung
 
@@ -391,6 +382,7 @@ Logs nur mit searchAgent (`.metadata/.log`, GROSS). Passende offene Punkte:
 - ⏳ **Homepage-Update für 2.15.0 steht aus** (webSearch, Compact-Sichtbarkeit, Skill-Roots,
   last-search-rolling wirkt nur im Agenten — evtl. kurz erwähnen): AGENTS.md verlangt User-Updates
   im selben Inkrement, der Nachtzyklus hat sie ausgelassen. Nachholen vor/vom Release.
+
 ## 2026-10-28 — Bug-Kandidaten aus dem R-CC-18.5-Zyklus (Delegations-Blocker)
 
 - ❓ **Totes MCP-Tool bleibt in der Spec-Liste:** Ist ein MCP-Server nicht erreichbar, bleiben seine
